@@ -1,5 +1,8 @@
 node_modules/
 data/
+dist/
+public/app.js
+public/app.js.map
 .env
 *.log
 .DS_Store

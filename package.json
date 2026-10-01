@@ -3,14 +3,21 @@
   "version": "1.0.0",
   "description": "Self-hosted, SerpApi-compatible search engine results page (SERP) scraper with an HTTP/headless-browser toggle and a web UI.",
   "type": "module",
-  "main": "src/server.js",
+  "main": "dist/server.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
-    "test": "node --test --test-concurrency=1",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:client": "tsc -p client/tsconfig.json",
+    "prestart": "npm run build",
+    "start": "node dist/server.js",
+    "predev": "npm run build:client",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json && tsc -p client/tsconfig.json --noEmit",
+    "pretest": "npm run build:client",
+    "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "install-browser": "puppeteer browsers install chrome"
   },
   "license": "MIT",
@@ -20,5 +27,12 @@
     "express": "^5.2.1",
     "puppeteer": "^25.12.0",
     "robots-parser": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.0",
+    "domhandler": "^5.0.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   }
 }

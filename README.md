@@ -2,7 +2,7 @@
 
 A self-hosted, **SerpApi-compatible** search-results scraper for your own machine. It exposes `GET /search.json` with SerpApi's parameters and response shape for Google **Search, News, Shopping, Images and Finance**, plus a web UI, a **runtime headless-browser toggle**, internal rate limiting and robots.txt handling.
 
-Node.js 20+, Express 5, Cheerio, Puppeteer. No authentication and no user management, by design.
+Written in **TypeScript** (strict mode): Node.js 22+, Express 5, Cheerio, Puppeteer. No authentication and no user management, by design.
 
 > **Read this first: what is verified and what is not**
 >
@@ -21,8 +21,10 @@ Node.js 20+, Express 5, Cheerio, Puppeteer. No authentication and no user manage
 ```bash
 npm install
 npm run install-browser        # downloads Chrome for headless mode (npm 11 skips Puppeteer's own postinstall)
-npm start                      # http://127.0.0.1:3000
+npm start                      # compiles the TypeScript, then serves http://127.0.0.1:3000
 ```
+
+`npm start` runs `npm run build` first (server to `dist/`, browser UI to `public/app.js`), then `node dist/server.js`. For a machine that only runs the service you can build once and start without recompiling: `npm run build && node dist/server.js` (it needs `npm install --omit=dev` dependencies only).
 
 Open <http://127.0.0.1:3000> for the web UI, or call the API directly:
 
@@ -170,31 +172,52 @@ Today `google.com/robots.txt` disallows `/search` (Search, Images, Shopping, New
 ## Architecture
 
 ```
-src/
-  server.js, app.js, config.js, settings.js, logger.js, errors.js
+src/                  server (TypeScript, compiled to dist/)
+  server.ts, app.ts, config.ts, settings.ts, logger.ts, errors.ts, types.ts
   engines/            one module per engine: validate params -> build URL -> parse   (google, googleNews, googleShopping…, googleFinance)
-  parsers/            pure HTML/XML/JSON -> SerpApi structure (unit-tested with fixtures)
+  parsers/            pure HTML/XML/JSON -> typed SerpApi structures (unit-tested with fixtures)
   scraper/            rateLimiter, robots, httpFetcher, browser (Puppeteer), guards (CAPTCHA/JS-wall/consent), cache, scraper (orchestration)
   service/            searchService: mode selection, cache, fallback, SerpApi envelope, archive, history
-  serpapi/params.js   typed parameter reader, uule encoding
-  public/             web UI (vanilla JS, no build step)
+  serpapi/params.ts   typed parameter reader, uule encoding
+client/app.ts         web UI logic (compiled to public/app.js by tsc; no bundler)
+public/               static UI: index.html, style.css, generated app.js (git-ignored)
+test/                 node:test suites written in TypeScript (run through tsx)
 ```
 
 Admin endpoints used by the UI: `GET /api/status`, `GET /api/history`, `GET|PATCH|DELETE /api/settings`, `GET /health`.
 
+### Development
+
+| Script | What it does |
+| --- | --- |
+| `npm run dev` | Runs `src/server.ts` with `tsx watch` (restarts on change; builds the UI bundle first). |
+| `npm run build` | `tsc` for the server (`dist/`) and the client (`public/app.js`). |
+| `npm run typecheck` | Strict type-check of server, tests and client without emitting. |
+| `npm test` | Builds the client, then runs every test with Node's built-in runner. |
+
+The server targets Node's ESM + `NodeNext` resolution, so relative imports in `src/` and `test/` use the `.js` extension even though the files are `.ts`. Positional Google payloads (Finance) are deliberately handled as untyped rows behind shape checks; everything else, including every parser's output, is typed.
+
 ### Fixing a parser when Google changes its markup
 
 1. Reproduce the search and open `search_metadata.raw_html_file` (or call with `output=html`) to get the exact page that was parsed.
-2. Save it under `test/fixtures/`, adjust the selectors in `src/parsers/google*.js` until a test against that fixture passes.
+2. Save it under `test/fixtures/`, adjust the selectors in `src/parsers/google*.ts` until a test against that fixture passes.
 3. `npm test`.
 
 ## Tests
 
 ```bash
-npm test
+npm test          # builds the browser client, then runs all suites
+npm run typecheck # strict TypeScript check of src, test and client
 ```
 
-Runs on Node's built-in test runner (112 tests, about 20 s): parsers for every search type (Finance and the News RSS use **real captured Google data**, the Google SERP ones synthetic fixtures), the SerpApi endpoints end to end against a fake upstream (parameters, pagination, caching, validation), error cases (5xx + retry, refused connection, timeout, CAPTCHA + cooldown, JS wall, unparseable page, empty results), robots.txt policy, rate limiter, settings, and the **headless toggle**: runtime switching, browser lifecycle, per-request override, in-flight requests, fallback, launch failure, and (when Chrome is installed; otherwise skipped) a real-Chrome test where results only exist after JavaScript runs, so HTTP mode fails with `JS_REQUIRED` and headless mode succeeds.
+Runs on Node's built-in test runner via `tsx` (116 tests, roughly 20 s):
+
+- **Parsers** for every search type: Finance and the News RSS use **real captured Google data**; the Google SERP ones use synthetic fixtures (see `test/fixtures/README.md`). Includes malformed-input cases.
+- **SerpApi endpoints** end to end against a fake upstream: parameters, pagination, envelope, caching, validation (400s), archive, `output=html`.
+- **Error cases:** 5xx + retry, 4xx without retry, refused connection, timeout, CAPTCHA + cooldown, JS wall, unparseable page, empty results, malformed RSS, robots.txt `enforce`/`warn`/`off`.
+- **Infrastructure:** rate limiter, robots checker, settings store, cache, HTTP fetcher limits, page guards.
+- **Headless toggle:** runtime switching, browser lifecycle, per-request override, in-flight requests, opt-in fallback, launch failure, and a **real-Chrome** test where results only exist after JavaScript runs (so HTTP mode answers `JS_REQUIRED` and headless mode succeeds).
+- **Web UI:** the compiled client driven in a real Chrome (Finance render, the headless switch, the `JS_REQUIRED` and robots error actions). Real-Chrome tests are skipped, not failed, when no Chrome is installed.
 
 ## Not implemented (on purpose)
 
