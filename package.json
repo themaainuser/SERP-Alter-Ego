@@ -1,0 +1,24 @@
+{
+  "name": "serp-alter-ego",
+  "version": "1.0.0",
+  "description": "Self-hosted, SerpApi-compatible search engine results page (SERP) scraper with an HTTP/headless-browser toggle and a web UI.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test --test-concurrency=1",
+    "install-browser": "puppeteer browsers install chrome"
+  },
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "puppeteer": "^25.12.0",
+    "robots-parser": "^3.0.1"
+  }
+}
