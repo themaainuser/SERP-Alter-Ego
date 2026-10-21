@@ -183,8 +183,10 @@ interface State {
   view: 'visual' | 'json' | 'page';
   /** Path of the archived raw HTML for the last result (null when Google refused the fetch). */
   rawPath: string | null;
+  /** Origin the archived page was fetched from (for resolving its relative links). */
+  frameOrigin: string;
 }
-const state: State = { engine: 'google', status: null, settings: null, lastBody: null, view: 'visual', rawPath: null };
+const state: State = { engine: 'google', status: null, settings: null, lastBody: null, view: 'visual', rawPath: null, frameOrigin: 'https://www.google.com' };
 
 // ---------- tiny DOM helpers ----------
 /** Look up an element that must exist in index.html. */
@@ -383,6 +385,11 @@ function showResult({ status, body, ms, mode, cache }: ResultView): void {
   raw.hidden = !rawHref;
   if (rawHref) raw.href = new URL(rawHref).pathname;
   state.rawPath = rawHref ? new URL(rawHref).pathname : null;
+  try {
+    state.frameOrigin = body.search_metadata?.google_url ? new URL(body.search_metadata.google_url).origin : 'https://www.google.com';
+  } catch {
+    state.frameOrigin = 'https://www.google.com';
+  }
 
   $('json').textContent = JSON.stringify(body, null, 2);
   renderVisual(body);
@@ -576,6 +583,40 @@ function setView(view: State['view']): void {
   // and drop it again on tab-out so the document can be collected.
   const frame = $<HTMLIFrameElement>('page-frame');
   frame.src = view === 'page' && state.rawPath ? `${state.rawPath}?render=1` : 'about:blank';
+  if (view === 'page') wireFrameLinks(frame);
+}
+
+/**
+ * The framed Google page is sandboxed and scriptless, and Google emits result links as relative
+ * `/goto?url=…` — inside the frame those would resolve against our origin and 404. The parent
+ * shares the frame's origin, so it attaches the click handler instead: every link opens in a new
+ * tab, with encrypted redirects routed through our /goto resolver. (The frame's own scripts stay
+ * disabled — this handler runs in the parent's realm.)
+ */
+function wireFrameLinks(frame: HTMLIFrameElement): void {
+  frame.onload = () => {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    doc.addEventListener('click', (ev) => {
+      const anchor = (ev.target as Element | null)?.closest?.('a[href]');
+      if (!anchor) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const raw = anchor.getAttribute('href') ?? '';
+      if (raw.startsWith('#')) return; // in-page anchor: nothing to open
+      let url: URL;
+      try {
+        url = new URL(raw, state.frameOrigin);
+      } catch {
+        return;
+      }
+      if (!/^https?:$/.test(url.protocol)) return;
+      const blob = url.pathname === '/goto' ? url.searchParams.get('url') : null;
+      const out = blob ? `${location.origin}/goto?url=${encodeURIComponent(blob)}` : url.toString();
+      // Popup blocked (no transient activation): fall back to navigating the frame itself.
+      if (!window.open(out, '_blank', 'noopener,noreferrer')) frame.src = out;
+    });
+  };
 }
 
 /** The "Rendered page" verdict: is this result backed by a real Google page we can show, or not? */
@@ -601,7 +642,7 @@ function renderPageView(body: SerpBody): void {
           ? `${n} ${label}${n === 1 ? '' : 's'} in the other views were parsed out of this exact DOM. `
           : 'This is the exact HTML Google returned for this request. ',
       }),
-      h('span', { class: 'as-is', text: 'Static render — scripts and Google’s no-JS redirect disabled; the raw bytes stay on Raw HTML.' }),
+      h('span', { class: 'as-is', text: 'Static render — scripts and Google’s no-JS redirect disabled; links open in a new tab.' }),
     );
   } else {
     strip.append(
@@ -615,6 +656,7 @@ function renderPageView(body: SerpBody): void {
   }
   frame.hidden = !rawPath;
   frame.src = state.view === 'page' && rawPath ? `${rawPath}?render=1` : 'about:blank';
+  if (rawPath && state.view === 'page') wireFrameLinks(frame);
 }
 
 // ---------- status, settings, history ----------

@@ -125,6 +125,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       cooldownMs: int(env.BLOCK_COOLDOWN_MS, 5 * 60 * 1000),
     }),
     archiveSize: int(env.ARCHIVE_SIZE, 25),
+    /**
+     * Optional directory to persist every successful search (`<id>.html` + `<id>.json`), so the
+     * `/searches/<id>...` links (`raw_html_file`, `json_endpoint`) survive restarts the way
+     * SerpApi's stored results do. Unset = in-memory ring buffer only (ARCHIVE_SIZE entries).
+     */
+    archiveDir: env.ARCHIVE_DIR ? path.resolve(env.ARCHIVE_DIR) : null,
     historySize: int(env.HISTORY_SIZE, 100),
     // Test/dev hooks: point the scraper at a different origin than google.com / news.google.com.
     upstream: Object.freeze({

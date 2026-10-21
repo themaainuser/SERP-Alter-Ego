@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { defined } from './helpers/assertions.js';
 import { type FakeUpstream, fixture, type Handler, html, startFakeUpstream, xml } from './helpers/fakeUpstream.js';
 import { startApp, type TestApp } from './helpers/app.js';
@@ -227,6 +230,67 @@ describe('SerpApi-compatible endpoints (HTTP mode)', () => {
     } finally {
       await localApp.stop();
       await local.close();
+    }
+  });
+
+  it('resolves /goto?url=<blob> to the real destination and rejects anything else', async () => {
+    // The fake upstream doubles as the Google host: /goto answers with a Location like Google does.
+    const local = await startFakeUpstream({
+      '/goto': (_req, res, url) => {
+        res.writeHead(302, { location: `https://example.com/real?q=${url.searchParams.get('url')}` });
+        res.end();
+      },
+    });
+    const localApp = await startApp({ upstream: local });
+    try {
+      const r = await localApp.get('/goto?url=CAESblob_1-2', { redirect: 'manual' });
+      assert.equal(r.status, 302);
+      assert.equal(r.headers.get('location'), 'https://example.com/real?q=CAESblob_1-2');
+
+      // The blob is forwarded verbatim to Google's own /goto, never interpreted as a target URL.
+      const evil = await localApp.get('/goto?url=https%3A%2F%2Fevil.example', { redirect: 'manual' });
+      assert.equal(evil.status, 400);
+      assert.equal(evil.json.error_code, 'INVALID_PARAMETER');
+
+      const missing = await localApp.get('/goto', { redirect: 'manual' });
+      assert.equal(missing.status, 400);
+    } finally {
+      await localApp.stop();
+      await local.close();
+    }
+  });
+
+  it('persists searches to ARCHIVE_DIR so archived links survive a restart', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'serp-archive-'));
+    const env = { ARCHIVE_DIR: dir };
+    let id = '';
+    const first = await startApp({ upstream, env });
+    try {
+      const { json } = await first.get('/search.json?engine=google&q=coffee');
+      id = json.search_metadata.id;
+      // Writes are fire-and-forget: wait for both files to land.
+      for (let i = 0; i < 100; i++) {
+        try {
+          await readFile(path.join(dir, `${id}.json`), 'utf8');
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      }
+      assert.match(await readFile(path.join(dir, `${id}.html`), 'utf8'), /id="rso"/);
+    } finally {
+      await first.stop();
+    }
+
+    const second = await startApp({ upstream, env }); // fresh process: memory is empty, disk keeps it
+    try {
+      const html = await second.get(`/searches/${id}.html`);
+      assert.equal(html.status, 200);
+      assert.match(html.text, /id="rso"/);
+      assert.equal((await second.get(`/searches/${id}.json`)).json.search_metadata.id, id);
+    } finally {
+      await second.stop();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

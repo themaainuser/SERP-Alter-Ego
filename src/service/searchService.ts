@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { Config } from '../config.js';
 import { resolveEngine } from '../engines/index.js';
 import { type ErrorCode, ScraperError, toScraperError } from '../errors.js';
@@ -87,8 +89,21 @@ export class SearchService {
     return [...this.recent].reverse();
   }
 
-  getArchived(id: string): { body: SearchBody; html: string } | undefined {
-    return this.archive.get(id);
+  /** Look up a search by id: the in-memory ring buffer first, then ARCHIVE_DIR when set. */
+  async getArchived(id: string): Promise<{ body: SearchBody; html: string } | undefined> {
+    const hit = this.archive.get(id);
+    if (hit) return hit;
+    const dir = this.config.archiveDir;
+    if (!dir) return undefined;
+    try {
+      const [html, json] = await Promise.all([
+        readFile(path.join(dir, `${id}.html`), 'utf8'),
+        readFile(path.join(dir, `${id}.json`), 'utf8'),
+      ]);
+      return { html, body: JSON.parse(json) as SearchBody };
+    } catch {
+      return undefined; // not persisted (or pruned by hand) — same 404 as an unknown id
+    }
   }
 
   #record(entry: HistoryEntry): void {
@@ -101,6 +116,18 @@ export class SearchService {
     for (const oldest of this.archive.keys()) {
       if (this.archive.size <= this.config.archiveSize) break;
       this.archive.delete(oldest);
+    }
+    const dir = this.config.archiveDir;
+    if (dir) {
+      // Persist beyond the ring buffer (fire-and-forget: a slow disk never delays the response).
+      void mkdir(dir, { recursive: true })
+        .then(() =>
+          Promise.all([
+            writeFile(path.join(dir, `${id}.html`), value.html),
+            writeFile(path.join(dir, `${id}.json`), JSON.stringify(value.body)),
+          ]),
+        )
+        .catch((err: unknown) => this.logger.warn('could not persist search to ARCHIVE_DIR', { id, err: String(err) }));
     }
   }
 

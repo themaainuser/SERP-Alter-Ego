@@ -147,10 +147,12 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
   app.get(['/search', '/search.json'], wrap((req, res) => handleSearch(req, res)));
   app.get('/search.html', wrap((req, res) => handleSearch(req, res, 'html')));
 
-  app.get('/searches/:file', (req, res, next) => {
-    const m = /^([a-f0-9]{24})\.(json|html)$/.exec(req.params.file);
-    const found = m && service.getArchived(m[1]);
-    if (!found) return next(new ScraperError('NOT_FOUND', 'Search not found. Only the most recent searches are kept in memory.'));
+  app.get('/searches/:file', wrap(async (req, res) => {
+    const m = /^([a-f0-9]{24})\.(json|html)$/.exec(String(req.params.file));
+    const found = m ? await service.getArchived(m[1]) : undefined;
+    if (!found || !m) {
+      throw new ScraperError('NOT_FOUND', 'Search not found. Recent searches live in memory; with ARCHIVE_DIR set they are also kept on disk.');
+    }
     if (m[2] === 'html') {
       // This archive is meant to be RENDERED — the UI's "Rendered page" view frames it and
       // raw_html_file links open it — so allow same-origin framing and the inline styles,
@@ -170,7 +172,35 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
       return void res.type(rawContentType(found.html)).send(html);
     }
     return void res.json(found.body);
-  });
+  }));
+
+  // Google emits result links as relative `/goto?url=<encrypted blob>`; inside the UI's framed
+  // render those resolve against our origin, and a middle-click "open in new tab" reaches us
+  // directly. Follow the 302 server-side and hand the browser the real destination. The blob is
+  // opaque — only a charset-validated value is ever forwarded, always to Google's own /goto.
+  app.get('/goto', wrap(async (req, res) => {
+    const blob = req.query.url;
+    if (typeof blob !== 'string' || !/^[A-Za-z0-9_-]{1,2000}$/.test(blob)) {
+      throw new ScraperError('INVALID_PARAMETER', 'Expected /goto?url=<Google encrypted-redirect blob>.');
+    }
+    const origin = config.upstream.googleBase ? new URL(config.upstream.googleBase).origin : 'https://www.google.com';
+    const target = `${origin}/goto?url=${encodeURIComponent(blob)}`;
+    const upstream = await fetch(target, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(Math.min(config.http.timeoutMs, 6000)),
+      headers: { accept: 'text/html,*/*', 'user-agent': config.userAgent },
+    });
+    await upstream.body?.cancel().catch(() => {});
+    const location = upstream.headers.get('location');
+    try {
+      const dest = location ? new URL(location, target) : null;
+      if (dest && /^https?:$/.test(dest.protocol)) return void res.redirect(302, dest.toString());
+    } catch {
+      // malformed Location — fall through
+    }
+    // Unresolvable here (expired blob / network): let Google answer the browser itself.
+    return void res.redirect(302, target);
+  }));
 
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
