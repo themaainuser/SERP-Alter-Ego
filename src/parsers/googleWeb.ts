@@ -56,6 +56,32 @@ export interface AnswerBox {
   link?: string;
   displayed_link?: string;
 }
+/** One block of Google's AI Overview, in SerpApi's `ai_overview.text_blocks` shape. */
+export interface AiTextBlock {
+  type: 'paragraph' | 'heading' | 'list' | 'table';
+  snippet?: string;
+  list?: AiListItem[];
+  table?: string[][];
+  /** 1-based positions into `ai_overview.references`, matching Google's on-page badges. */
+  reference_indexes?: number[];
+  snippet_highlighted_words?: string[];
+}
+export interface AiListItem {
+  title?: string;
+  snippet?: string;
+  reference_indexes?: number[];
+}
+export interface AiReference {
+  index: number;
+  title: string;
+  link: string;
+  source?: string;
+}
+/** SerpApi's `ai_overview`: ordered blocks plus the flat citation list they point into. */
+export interface AiOverview {
+  text_blocks: AiTextBlock[];
+  references: AiReference[];
+}
 export interface SearchInformation {
   query_displayed?: string;
   total_results?: number;
@@ -68,6 +94,7 @@ export interface WebData {
   ads?: Ad[];
   knowledge_graph?: KnowledgeGraph;
   answer_box?: AnswerBox;
+  ai_overview?: AiOverview;
   organic_results?: OrganicResult[];
   related_questions?: RelatedQuestion[];
   related_searches?: RelatedSearch[];
@@ -244,6 +271,282 @@ function parseFeaturedSnippet($: CheerioAPI, baseUrl: string): AnswerBox | undef
   });
 }
 
+// ---------------------------------------------------------------------------
+// AI Overview
+//
+// The block's *content* lives in a turn-scoped container (`div[data-scope-id="turn"]`,
+// observed identical across 2026-10 captures; the "AI Overview" title row, prose blocks,
+// heading/list/table sections, citation anchors and a sources strip). Content that "Show
+// more" reveals ships hidden behind Google's `.RVppL`/`display:none` markers — so when the
+// browser step expands the block before capture, the same walk picks the extra paragraphs
+// up automatically, and an unexpanded capture simply yields the preview.
+// ---------------------------------------------------------------------------
+
+// UI chrome that ships inside the block but is never answer content: scripts/styles/icons,
+// toasts (`aria-live` status/alert regions) and the share dialog (`role="dialog"`).
+const AI_SKIP = 'script, style, svg, button, noscript, template, iframe, [role="dialog"], [role="alert"], [role="status"], [aria-live]';
+
+/** True when the element is hidden by markup (not by a stylesheet we cannot see). */
+function hiddenByMarkup($: CheerioAPI, el: AnyNode): boolean {
+  if ($(el).attr('hidden') !== undefined) return true;
+  const style = $(el).attr('style') || '';
+  if (/display:\s*none/i.test(style)) return true;
+  // `.RVppL` is Google's "hidden until expanded" marker (its stylesheet ships
+  // `.RVppL{display:none}`); an inline visible display overrides it.
+  if (/\bRVppL\b/.test($(el).attr('class') || '') && !/display:\s*(block|inline|flex|grid|contents|list-item)/i.test(style)) return true;
+  return false;
+}
+
+/** Hidden anywhere up the ancestor chain (or is itself hidden). */
+function hiddenDeep($: CheerioAPI, el: AnyNode): boolean {
+  let hidden = false;
+  $(el).parents().addBack().each((_, n) => {
+    if (hiddenByMarkup($, n)) hidden = true;
+  });
+  return hidden;
+}
+
+/** A copy of the subtree with scripts/icons/hidden content stripped — i.e. what a reader sees. */
+function visibleClone($: CheerioAPI, el: AnyNode): Selection {
+  const clone = $(el).clone();
+  if (!hiddenByMarkup($, el)) {
+    clone.find(AI_SKIP).remove();
+    clone.find('*').each((_, n) => {
+      if (hiddenByMarkup($, n)) $(n).remove();
+    });
+  } else {
+    clone.remove();
+  }
+  return clone;
+}
+
+const visibleText = ($: CheerioAPI, el: AnyNode): string => clean(visibleClone($, el).text());
+
+/** Citation anchors are labelled links to a destination (encrypted /goto, /url or direct). */
+function isCitationHref(href: string | undefined, baseUrl: string): boolean {
+  if (!href || /^(#|javascript:|mailto:)/i.test(href)) return false;
+  const abs = absoluteUrl(href, baseUrl);
+  if (!abs) return false;
+  try {
+    const u = new URL(abs);
+    if (!isGoogleHost(u.hostname)) return true;
+    return u.pathname === '/goto' || u.pathname === '/url';
+  } catch {
+    return false;
+  }
+}
+
+/** `https://en.wikipedia.org/...` -> `en.wikipedia.org`; encrypted redirects yield undefined. */
+export function linkSource(abs: string): string | undefined {
+  try {
+    const u = new URL(abs);
+    return isGoogleHost(u.hostname) ? undefined : u.hostname.replace(/^www\./, '');
+  } catch {
+    return undefined;
+  }
+}
+
+function findAiRoot($: CheerioAPI): Selection | undefined {
+  const turn = $('div[data-scope-id="turn"]')
+    .filter((_, el) => !hiddenDeep($, el) && $(el).text().length >= 60)
+    .first();
+  if (turn.length) return turn;
+  const heading = $('[role="heading"]')
+    .filter((_, el) => /^AI Overview:?$/i.test(clean($(el).text())))
+    .first();
+  if (heading.length) {
+    const box = heading.closest('[data-scope-id], div.qRuFed, div.CKgc1d');
+    if (box.length) return box;
+  }
+  const fallback = $('div.qRuFed, div.CKgc1d').filter((_, el) => !hiddenDeep($, el) && $(el).text().length >= 60).first();
+  return fallback.length ? fallback : undefined;
+}
+
+/**
+ * Extract `ai_overview` (SerpApi shape) from a rendered page. Returns undefined when the
+ * page has no AI Overview. Walks the block in DOM order emitting paragraph / heading /
+ * list / table blocks; link-heavy rows (the sources strip) are left to `references`.
+ */
+function parseAiOverview($: CheerioAPI, baseUrl: string): AiOverview | undefined {
+  const root = findAiRoot($);
+  if (!root) return undefined;
+
+  // References first: every labelled citation anchor, in DOM order (inline citations in the
+  // prose come first, so 1..n matches Google's badge order closely).
+  const references: AiReference[] = [];
+  const refIndex = new Map<string, number>();
+  root.find('a[href]').each((_, el) => {
+    if (hiddenDeep($, el)) return;
+    const a = $(el);
+    const href = a.attr('href');
+    const label = clean(a.attr('aria-label') || a.text());
+    if (!label || !isCitationHref(href, baseUrl)) return;
+    const abs = absoluteUrl(href, baseUrl);
+    if (!abs || refIndex.has(abs)) return;
+    refIndex.set(abs, references.length + 1);
+    references.push({ index: references.length + 1, title: label, link: abs, source: linkSource(abs) });
+  });
+
+  const blocks: AiTextBlock[] = [];
+  const indexes = (el: AnyNode): number[] | undefined => {
+    const out = new Set<number>();
+    $(el)
+      .find('a[href]')
+      .each((_, a) => {
+        if (hiddenDeep($, a)) return;
+        const abs = absoluteUrl($(a).attr('href'), baseUrl);
+        const i = abs ? refIndex.get(abs) : undefined;
+        if (i) out.add(i);
+      });
+    return out.size ? [...out].sort((x, y) => x - y) : undefined;
+  };
+
+  function pushList(el: AnyNode): void {
+    const items: AiListItem[] = [];
+    $(el)
+      .find('li')
+      .each((_, li) => {
+        if (hiddenDeep($, li)) return;
+        // Google's "cobrowse" card link marks whole source/question chips (the strip beside
+        // the answer). Their labels live in spans outside the empty-text anchor, so this is
+        // the reliable tell — such items duplicate `references` and are not prose.
+        if ($(li).find('a[data-link-behavior]').length) return;
+        const clone = visibleClone($, li);
+        clone.children('ul, ol').remove(); // nested items are emitted as their own entries
+        const itemText = clean(clone.text()) || undefined;
+        // Also drop items that are mostly their links' own text (other chip-row shapes).
+        const linkChars = clone
+          .find('a')
+          .map((__, a) => clean($(a).text()).length)
+          .get()
+          .reduce((sum, n) => sum + n, 0);
+        if (itemText && linkChars / itemText.length > 0.6) return;
+        const t = clone.children('b, strong, [role="heading"]').first();
+        let title: string | undefined;
+        if (t.length && clean(t.text()).length <= 60) {
+          title = clean(t.text());
+          t.remove();
+        }
+        // The separator colon sits outside the bold title in Google's markup — fold it away
+        // so `title`/`snippet` match SerpApi's split.
+        const snippet = (clean(clone.text()) || undefined)?.replace(/^[:\-\s]+/, '') || undefined;
+        if (!title && !snippet) return;
+        items.push(compact({ title, snippet, reference_indexes: indexes(li) }));
+      });
+    if (items.length) blocks.push(compact({ type: 'list', list: items }));
+  }
+
+  function pushTable(el: AnyNode): void {
+    const rows: string[][] = [];
+    $(el)
+      .find('tr')
+      .each((_, tr) => {
+        if (hiddenDeep($, tr)) return;
+        const cells: string[] = [];
+        $(tr)
+          .children('th, td')
+          .each((__, td) => {
+            cells.push(clean($(td).text()));
+          });
+        if (cells.some(Boolean)) rows.push(cells);
+      });
+    if (rows.length) blocks.push(compact({ type: 'table', table: rows }));
+  }
+
+  function visit(el: AnyNode): void {
+    const node = $(el);
+    if (node.is(AI_SKIP) || hiddenDeep($, el)) return;
+    const txt = visibleText($, el);
+    if (!txt || /^AI Overview:?$/i.test(txt)) return; // empty subtree / the block's own title row
+
+    if (node.is('[role="heading"], h1, h2, h3, h4, h5, h6')) {
+      blocks.push(compact({ type: 'heading', snippet: txt, reference_indexes: indexes(el) }));
+      return;
+    }
+    const tag = 'tagName' in el ? el.tagName.toLowerCase() : '';
+    if (tag === 'ul' || tag === 'ol') return pushList(el);
+    if (tag === 'table') return pushTable(el);
+
+    if (tag === 'div' || tag === 'p' || tag === 'section' || tag === 'article' || tag === 'aside') {
+      const kids = node
+        .children('div, p, ul, ol, table, h1, h2, h3, h4, h5, h6, section, article, [role="heading"]')
+        .filter((_, k) => !hiddenDeep($, k));
+      // Structural children (headings/lists/tables) always carry content, however short;
+      // prose wrappers only count when they hold a meaningful chunk of text.
+      const content = kids.filter((_, k) => {
+        const kn = $(k);
+        if (kn.is('[role="heading"], h1, h2, h3, h4, h5, h6, ul, ol, table')) return true;
+        return visibleText($, k).length >= 20;
+      });
+      if (content.length) {
+        content.each((__, k) => visit(k)); // children carry the content; nothing at this level
+        return;
+      }
+      if (txt.length < 30) return; // widget/whitespace debris
+      // A row of chips/links (the sources strip) is citations, not prose.
+      const linkChars = node
+        .find('a')
+        .filter((_, a) => !hiddenDeep($, a))
+        .map((__, a) => clean($(a).text()).length)
+        .get()
+        .reduce((sum, n) => sum + n, 0);
+      if (txt.length && linkChars / txt.length > 0.6) return;
+      const marks = [...new Set(node.find('mark').filter((__, m) => !hiddenDeep($, m)).map((__, m) => clean($(m).text())).get())].filter(Boolean);
+      blocks.push(
+        compact({
+          type: 'paragraph',
+          snippet: txt,
+          reference_indexes: indexes(el),
+          snippet_highlighted_words: marks.length ? marks : undefined,
+        }),
+      );
+      return;
+    }
+    // Anything else (span, a, img, …): not structural — visit element children so wrappers
+    // around real content still get reached.
+    node.children().each((__, c) => visit(c));
+  }
+
+  root.children().each((_, child) => visit(child));
+  if (!blocks.length && !references.length) return undefined;
+  return { text_blocks: blocks, references };
+}
+
+/**
+ * Collapse references that ended up pointing at the same destination — an inline citation
+ * and a strip chip for one source carry different `/goto` blobs — then renumber 1..n so the
+ * list stays contiguous (SerpApi lists each source once). Call AFTER link resolution, so
+ * duplicates are only merged when both links were resolved to a real destination; unresolved
+ * (`/goto`) links cannot be compared and are left alone.
+ */
+export function dedupeAiReferences(aio: AiOverview): void {
+  const byDest = new Map<string, number>(); // resolved destination -> its first index
+  const collapse = new Map<number, number>(); // later index -> the first index
+  for (const ref of aio.references) {
+    if (!linkSource(ref.link)) continue; // still an encrypted/google link — no destination known
+    const first = byDest.get(ref.link);
+    if (first === undefined) byDest.set(ref.link, ref.index);
+    else collapse.set(ref.index, first);
+  }
+  if (!collapse.size) return;
+
+  aio.references = aio.references.filter((r) => !collapse.has(r.index));
+  const finalIndex = new Map<number, number>();
+  aio.references.forEach((r, i) => {
+    finalIndex.set(r.index, i + 1);
+    r.index = i + 1;
+  });
+  const fix = (arr: number[] | undefined): number[] | undefined => {
+    if (!arr?.length) return undefined;
+    const out = [...new Set(arr.map((i) => finalIndex.get(collapse.get(i) ?? i) ?? i))].filter((i) => i > 0);
+    return out.length ? out : undefined;
+  };
+  for (const block of aio.text_blocks) {
+    block.reference_indexes = fix(block.reference_indexes);
+    for (const item of block.list ?? []) item.reference_indexes = fix(item.reference_indexes);
+  }
+}
+
 /**
  * Parse a rendered Google web results page.
  * `buildSerpApiLink(query)` turns a related-search query into a local serpapi_link.
@@ -278,6 +581,7 @@ export function parseGoogleWeb(
     ads: parseAds($, baseUrl),
     knowledge_graph: parseKnowledgeGraph($, baseUrl),
     answer_box: parseFeaturedSnippet($, baseUrl),
+    ai_overview: parseAiOverview($, baseUrl),
     organic_results: organic,
     related_questions: parseRelatedQuestions($, baseUrl),
   };

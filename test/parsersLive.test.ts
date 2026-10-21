@@ -62,6 +62,38 @@ describe('parsers against live-captured pages', () => {
     assert.ok(images_results.some((r) => r.original), 'the /imgres tiles must keep their original URLs');
   });
 
+  it('extracts the AI Overview from every live web capture', () => {
+    for (const file of ['web-coffee.html', 'web-espresso-info.html', 'web-ads.html']) {
+      const { data } = parseGoogleWeb(live(file));
+      const aio = data.ai_overview;
+      assert.ok(aio, `${file}: ai_overview must parse`);
+      assert.ok(aio.text_blocks.length >= 3, `${file}: expected >=3 text blocks, got ${aio.text_blocks.length}`);
+      assert.ok(aio.references.length >= 2, `${file}: expected >=2 references, got ${aio.references.length}`);
+      assert.ok(
+        aio.text_blocks.every((b) => b.snippet || b.list?.length || b.table?.length),
+        `${file}: every text block carries content`,
+      );
+      assert.ok(
+        aio.references.every((r) => r.index >= 1 && r.title && /^https:\/\//.test(r.link)),
+        `${file}: every reference needs index, title and an absolute link`,
+      );
+      // Inline citation badges must land inside the reference range they key into.
+      const maxRef = aio.references.length;
+      assert.ok(
+        aio.text_blocks.every((b) => (b.reference_indexes ?? []).every((i) => i >= 1 && i <= maxRef)),
+        `${file}: reference_indexes must point into references`,
+      );
+      // The block ships UI chrome (clipboard toast, share dialog, sources strip) that must
+      // never leak into the answer text.
+      assert.ok(!JSON.stringify(aio).includes('Copied to clipboard'), `${file}: toast leaked into text_blocks`);
+      assert.ok(!JSON.stringify(aio).includes('public link is valid'), `${file}: share dialog leaked into text_blocks`);
+      assert.ok(
+        !aio.text_blocks.some((b) => b.type === 'list' && (b.list ?? []).some((li) => (li.snippet ?? '').includes('Espresso Machines'))),
+        `${file}: sources strip leaked into a list block`,
+      );
+    }
+  });
+
   it('parses every story of the live news tab with source and date', () => {
     const { news_results } = parseSearchNews(live('news-tab.html'));
     assert.equal(news_results.length, 10);

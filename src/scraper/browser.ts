@@ -32,11 +32,41 @@ const defaultLauncher: BrowserLauncher = async (options) => {
 export interface RenderOptions {
   readySelector?: PageRequest["readySelector"];
   readyTimeoutMs?: PageRequest["readyTimeoutMs"];
+  expandAiOverview?: PageRequest["expandAiOverview"];
   afterLoad?: PageRequest["afterLoad"];
   userAgent?: string;
   acceptLanguage?: string;
   cookies?: CookieData[];
 }
+
+/**
+ * In-page script: click the AI Overview's "Show more" control and wait for the answer to
+ * settle, so the captured DOM holds the expanded content. Passed as a STRING expression
+ * because the server compiles without the DOM lib. Waits up to ~5s for the control to
+ * appear (Google streams the block in after the results), clicks it, then waits until the
+ * page text stops growing (or ~8s, whichever first). Returns true when a control was clicked.
+ */
+const EXPAND_AI_OVERVIEW = `(async () => {
+  const find = () => document.querySelector('[aria-label="Show more AI Overview"]');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const t0 = Date.now();
+  let btn = find();
+  while (!btn && Date.now() - t0 < 5000) { await sleep(200); btn = find(); }
+  if (!btn) return false;
+  const before = document.body.innerText.length;
+  btn.click();
+  const t1 = Date.now();
+  let last = before;
+  let stableSince = Date.now();
+  while (Date.now() - t1 < 8000) {
+    await sleep(150);
+    if (!find()) return true; // the control vanished — expanded
+    const n = document.body.innerText.length;
+    if (n !== last) { last = n; stableSince = Date.now(); }
+    else if (Date.now() - stableSince > (n > before ? 700 : 2500)) return true; // settled (or nothing to expand)
+  }
+  return true;
+})()`;
 
 export interface BrowserStatus {
   running: boolean;
@@ -182,14 +212,17 @@ export class BrowserManager {
    * Ephemeral mode (no CHROME_USER_DATA_DIR): each render gets an isolated context (no shared cookies).
    * Persistent mode (CHROME_USER_DATA_DIR set): pages share the profile's default context, so
    * cookies/history/logins persist. Max-pages concurrency is still enforced.
-   * `readySelector` (optional) is awaited best-effort; `afterLoad(page)` may return extra data
-   * (e.g. intercepted XHR payloads) that is passed back as `extras`.
+   * `readySelector` (optional) is awaited best-effort; `expandAiOverview` clicks the AI
+   * Overview's "Show more" control and waits for the answer to settle (best-effort);
+   * `afterLoad(page)` may return extra data (e.g. intercepted XHR payloads) that is passed
+   * back as `extras`.
    */
   async render(
     url: string,
     {
       readySelector,
       readyTimeoutMs,
+      expandAiOverview,
       afterLoad,
       userAgent,
       acceptLanguage = "en-US,en;q=0.9",
@@ -357,6 +390,16 @@ export class BrowserManager {
         }
       }
       t.ready = Date.now();
+      // Expand the AI Overview (if any) before anything reads the DOM: the block streams in
+      // after the results, hence the generous in-page waits; a page without one only pays them.
+      if (expandAiOverview && !interstitial) {
+        try {
+          const clicked = (await page.evaluate(EXPAND_AI_OVERVIEW)) as boolean;
+          if (clicked) this.logger?.debug("AI Overview expanded", { url: page.url() });
+        } catch (err) {
+          this.logger?.warn("Could not expand the AI Overview; capturing the page as rendered.", { err: String(err) });
+        }
+      }
       const extras = afterLoad && !interstitial ? await afterLoad(page) : undefined;
       t.after = Date.now();
       const html = await page.content();

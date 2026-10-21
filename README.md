@@ -34,6 +34,8 @@ curl "http://127.0.0.1:3000/search.json?engine=google_finance&q=GOOGL:NASDAQ"
 
 The web UI shows each result three ways: **Visual**, **JSON**, and **Rendered page** — the actual Google page behind the search, framed and rendered as returned (scripts and Google's no-JS redirect disabled), under a verdict strip that says whether the result is backed by a real Google page or by a refusal (CAPTCHA / JS wall). The framed page is the archive that `search_metadata.raw_html_file` also links to; the archive itself stays byte-exact. Links clicked in the rendered view open in a new tab, with Google's encrypted `/goto?url=…` redirects resolved through the service's own `GET /goto` endpoint. Searches are kept in memory (the last `ARCHIVE_SIZE`); set `ARCHIVE_DIR=./archive` to also persist every search's `.html`/`.json` to disk, so `raw_html_file` / `json_endpoint` links survive restarts the way SerpApi's stored results do.
 
+When Google shows an **AI Overview**, the JSON carries it as SerpApi's `ai_overview` (`text_blocks` — paragraph/heading/list/table with `reference_indexes` — plus the flat `references` list) and the Visual view renders it above the results with matching citation numbers. Headless searches click the block's *Show more* control before the page is captured, so the extraction sees the expanded answer rather than the clamped preview (`GOOGLE_EXPAND_AI=false` skips the click); HTTP-mode responses parse whatever Google server-renders, which may be the preview. Encrypted citation links are resolved like organic results, and references that resolve to one destination are merged.
+
 Already have Chrome? Skip `install-browser` and set `CHROME_PATH=/path/to/chrome` (add `CHROME_NO_SANDBOX=true` when running as root or in Docker). Headless mode is never needed for the HTTP-only paths, and Puppeteer is only loaded when a browser is first used.
 
 Configuration comes from environment variables or a `.env` file in the working directory (see [`.env.example`](.env.example)):
@@ -64,7 +66,7 @@ All endpoints are `GET /search.json` with `engine=…`. Common parameters: `q`, 
 ```bash
 B=http://127.0.0.1:3000
 
-# Google Search: organic_results, knowledge_graph, answer_box, related_questions, related_searches, ads, pagination
+# Google Search: organic_results, knowledge_graph, answer_box, ai_overview, related_questions, related_searches, ads, pagination
 curl "$B/search.json?engine=google&q=best+coffee+grinder&num=10&hl=en&gl=us&location=Austin,+Texas,+United+States"
 
 # News: google_news engine (news_results with source, date, iso_date, stories); or the web News tab via tbm=nws

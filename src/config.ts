@@ -38,6 +38,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
      */
     resolveGoogleLinks: bool(env.GOOGLE_RESOLVE_LINKS, true),
     /**
+     * Headless web searches click the AI Overview's "Show more" control before the DOM is
+     * captured, so `ai_overview` carries the expanded answer (SerpApi shape). Costs a bounded
+     * wait per search (up to ~5s for the block to appear + ~8s for it to settle); when the page
+     * has no AI Overview only the appearance wait is paid. Set `GOOGLE_EXPAND_AI=false` to skip.
+     */
+    googleExpandAi: bool(env.GOOGLE_EXPAND_AI, true),
+    /**
      * Route outbound traffic through an HTTP(S) or SOCKS5 proxy — the primary defence against
      * Google's IP-reputation blocks, because a fresh residential IP is challenged far less
      * often than a datacenter one (this is what commercial SERP APIs actually run on). Applied

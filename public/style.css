@@ -798,6 +798,54 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 15
 .kg dt { color: var(--muted); text-transform: capitalize; }
 .kg dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
+/* ---------- AI Overview ----------
+   The answer reads as prose at the reading measure; inline superscripts key into the
+   sources row underneath (same numbers the JSON reports as reference_indexes). */
+.aio { max-width: 75ch; }
+.aio-p { font-size: var(--fs-sm); line-height: 1.6; margin-bottom: var(--sp-3); }
+.aio-p:last-child { margin-bottom: 0; }
+.aio-h {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--fs-base);
+  color: var(--text);
+  margin: var(--sp-3) 0 var(--sp-2);
+}
+.aio-h:first-child { margin-top: 0; }
+.aio-list { margin: 0 0 var(--sp-3); padding-left: 1.15em; font-size: var(--fs-sm); line-height: 1.6; }
+.aio-list li { margin-bottom: 6px; }
+.aio-list b { font-weight: 600; }
+.aio mark {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.aio-cite { font-size: 10px; line-height: 1; vertical-align: super; margin-left: 2px; color: var(--muted); }
+.aio-cite a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.aio-cite a:hover { text-decoration: underline; }
+.aio-table { border-collapse: collapse; font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
+.aio-table td { border: 1px solid var(--line); padding: 5px 8px; }
+.aio-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+.aio-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  max-width: 260px;
+  min-width: 0;
+}
+.aio-src sup { font-weight: 600; color: var(--accent); }
+.aio-src a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- finance ---------- */
 .quote { display: flex; flex-wrap: wrap; gap: var(--sp-4); align-items: flex-end; justify-content: space-between; }
 .quote .name { color: var(--muted); font-size: var(--fs-sm); margin-bottom: 4px; }

@@ -21,6 +21,13 @@ export interface PageRequest {
   readySelector?: string;
   /** Headless only: overrides `BROWSER_READY_TIMEOUT_MS` for this request. */
   readyTimeoutMs?: number;
+  /**
+   * Headless only: after the page is ready, clicks Google's "Show more" control on the AI
+   * Overview (waiting for the block to appear and then to settle) so the captured DOM holds
+   * the expanded answer rather than the clamped preview. Best-effort: a page without an AI
+   * Overview simply times out the wait and captures as-is.
+   */
+  expandAiOverview?: boolean;
   /** Headless only: runs after load; its result is returned as `extras`. */
   afterLoad?: (page: Page) => Promise<PageExtras>;
   headers?: Record<string, string>;

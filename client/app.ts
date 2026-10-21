@@ -97,6 +97,21 @@ interface FinanceKnowledgeGraph {
   key_stats?: { stats?: Array<{ label: string; description?: string; value: string }> };
   about?: { description?: { snippet?: string }; info?: Array<{ label: string; value: string }> };
 }
+/** One `ai_overview.text_blocks[]` entry (SerpApi shape, abbreviated for the visual view). */
+interface AiBlock {
+  type?: string;
+  snippet?: string;
+  list?: Array<{ title?: string; snippet?: string; reference_indexes?: number[] }>;
+  table?: string[][];
+  reference_indexes?: number[];
+  snippet_highlighted_words?: string[];
+}
+interface AiReference {
+  index?: number;
+  title?: string;
+  link?: string;
+  source?: string;
+}
 interface SerpBody {
   search_metadata?: { raw_html_file?: string; google_url?: string; robots_txt?: string; scraper_fallback?: boolean };
   search_parameters?: { window?: string };
@@ -105,6 +120,7 @@ interface SerpBody {
   search_information?: { total_results?: number; time_taken_displayed?: number };
   ads?: Array<{ title: string; link: string; displayed_link?: string; snippet?: string }>;
   answer_box?: { snippet?: string; title?: string; link?: string };
+  ai_overview?: { text_blocks?: AiBlock[]; references?: AiReference[] };
   organic_results?: Organic[];
   /** A web search returns a knowledge panel; a finance search returns key stats + about. */
   knowledge_graph?: WebKnowledgeGraph & FinanceKnowledgeGraph;
@@ -405,7 +421,7 @@ function renderVisual(body: SerpBody): void {
   const v = $('visual');
   clear(v);
   const isFinance = Boolean(body.summary);
-  if (!isFinance && (body.organic_results || body.knowledge_graph || body.related_searches)) renderWeb(v, body);
+  if (!isFinance && (body.ai_overview || body.organic_results || body.knowledge_graph || body.related_searches)) renderWeb(v, body);
   if (body.news_results && !isFinance) renderNews(v, body.news_results);
   if (body.shopping_results) renderShopping(v, body.shopping_results);
   if (body.images_results) renderImages(v, body);
@@ -413,11 +429,60 @@ function renderVisual(body: SerpBody): void {
   if (!v.children.length && !body.error) v.append(h('p', { class: 'muted', text: 'No visual representation for this response; see the JSON tab.' }));
 }
 
+/**
+ * Render Google's AI Overview (expanded when the headless flow clicked "Show more"):
+ * ordered text blocks with inline citation superscripts, then the sources row they key into.
+ */
+function renderAiOverview(v: HTMLElement, body: SerpBody): void {
+  const aio = body.ai_overview;
+  if (!aio?.text_blocks?.length) return;
+  const references = aio.references ?? [];
+  const refs = new Map<number, AiReference>();
+  for (const r of references) if (typeof r.index === 'number') refs.set(r.index, r);
+
+  const cite = (indexes?: number[]): Child[] =>
+    (indexes ?? []).map((i) => {
+      const r = refs.get(i);
+      return h('sup', { class: 'aio-cite' }, r?.link ? link(String(i), r.link) : String(i));
+    });
+  const marked = (text: string, words?: string[]): Child[] => {
+    if (!words?.length) return [text];
+    const out: Child[] = [];
+    let rest = text;
+    for (const w of words) {
+      const at = rest.indexOf(w);
+      if (at < 0) continue;
+      if (at) out.push(rest.slice(0, at));
+      out.push(h('mark', { text: w }));
+      rest = rest.slice(at + w.length);
+    }
+    if (rest) out.push(rest);
+    return out;
+  };
+  const blockEl = (b: AiBlock): Child => {
+    if (b.type === 'list' && b.list?.length) {
+      return h('ul', { class: 'aio-list' }, b.list.map((li) => h('li', {}, li.title ? [h('b', { text: li.title }), ': '] : null, li.snippet || '', ...cite(li.reference_indexes))));
+    }
+    if (b.type === 'table' && b.table?.length) {
+      return h('table', { class: 'aio-table' }, b.table.map((cells) => h('tr', {}, cells.map((c) => h('td', { text: c })))));
+    }
+    if (!b.snippet) return null;
+    if (b.type === 'heading') return h('div', { class: 'aio-h' }, ...marked(b.snippet), ...cite(b.reference_indexes));
+    return h('p', { class: 'aio-p' }, ...marked(b.snippet, b.snippet_highlighted_words), ...cite(b.reference_indexes));
+  };
+  const sources = references.length
+    ? h('div', { class: 'aio-sources' }, references.map((r) => h('span', { class: 'aio-src' }, h('sup', { text: r.index != null ? String(r.index) : '' }), link(r.title || r.source || r.link || 'source', r.link))))
+    : null;
+  v.append(section('AI Overview', h('div', { class: 'aio' }, aio.text_blocks.map(blockEl), sources)));
+}
+
 function renderWeb(v: HTMLElement, body: SerpBody): void {
   const info = body.search_information;
   if (info?.total_results) {
     v.append(h('p', { class: 'muted', text: `About ${info.total_results.toLocaleString()} results${info.time_taken_displayed ? ` (${info.time_taken_displayed}s)` : ''}` }));
   }
+
+  renderAiOverview(v, body);
 
   if (body.ads?.length) {
     v.append(section('Ads', h('div', { class: 'cards' }, body.ads.map((a) => h('div', { class: 'result-card' }, link(a.title, a.link, 'link-title'), h('div', { class: 'crumb', text: a.displayed_link || '' }), h('div', { class: 'snippet', text: a.snippet || '' }))))));

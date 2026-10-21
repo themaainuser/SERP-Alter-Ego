@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { defined } from './helpers/assertions.js';
 import { fixture } from './helpers/fakeUpstream.js';
-import { parseGoogleWeb } from '../src/parsers/googleWeb.js';
+import { dedupeAiReferences, type AiOverview, parseGoogleWeb } from '../src/parsers/googleWeb.js';
 import { parseNewsPage, parseNewsRss, parseSearchNews } from '../src/parsers/googleNews.js';
 import { parseShopping } from '../src/parsers/googleShopping.js';
 import { parseImages } from '../src/parsers/googleImages.js';
@@ -104,6 +104,101 @@ describe('google web parser', () => {
     assert.equal(organic[0]?.link, 'https://www.google.com/goto?url=CAESvQEB6zswFSSR-AJgrV4DBe0i4lPxkmuZrXJDFRHceA575LDxP40Az');
     assert.equal(organic[0]?.displayed_link, 'https://example-coffee.com › best-espresso-machines');
     assert.equal(organic[1]?.link, 'https://www.example.org/manual-grinders');
+  });
+
+  it('extracts the AI Overview as SerpApi text blocks with reference indexes', () => {
+    const page = `
+      <div id="search">
+        <div data-scope-id="turn">
+          <div class="SGF5Lb"><div role="heading" aria-level="2"><strong>AI Overview</strong></div></div>
+          <div>
+            <h3>AI Mode replied:</h3>
+            <div>
+              <div>
+                <div>
+                  Espresso is <mark>a concentrated coffee</mark> brewed by forcing hot water through
+                  <a href="/goto?url=REFBLOB" aria-label="Coffee Site"></a>
+                  finely ground beans under pressure.
+                </div>
+                <div role="heading" aria-level="3">How It Works</div>
+                <div>
+                  <ul>
+                    <li><strong>Grind size</strong>: Very fine, like table salt.</li>
+                    <li>No paper filter involved.</li>
+                    <li><a data-link-behavior="cobrowse" href="/goto?url=CHIPBLOB" aria-label="Chip Source"></a><span>Chip Source</span></li>
+                  </ul>
+                </div>
+              </div>
+              <div class="strip"><a href="https://www.example.com/dest" aria-label="Direct Source">Direct</a></div>
+            </div>
+            <div class="RVppL">Collapsed junk that must not parse.</div>
+            <div hidden>Hidden junk that must not parse.</div>
+            <div role="dialog">Share dialog junk that must not parse.</div>
+          </div>
+        </div>
+      </div>`;
+    const { data, hasLayout } = parseGoogleWeb(page, { query: 'what is espresso' });
+    assert.equal(hasLayout, true);
+    const aio = defined(data.ai_overview, 'ai_overview');
+
+    // DOM order: the label heading, the answer paragraph, the section heading, the prose list.
+    assert.deepEqual(
+      aio.text_blocks.map((b) => b.type),
+      ['heading', 'paragraph', 'heading', 'list'],
+    );
+    assert.equal(aio.text_blocks[0]?.snippet, 'AI Mode replied:');
+    const para = aio.text_blocks[1]!;
+    assert.match(String(para.snippet), /^Espresso is a concentrated coffee brewed by forcing hot water through finely ground beans/);
+    assert.deepEqual(para.reference_indexes, [1]);
+    assert.deepEqual(para.snippet_highlighted_words, ['a concentrated coffee']);
+    assert.equal(aio.text_blocks[2]?.snippet, 'How It Works');
+
+    const list = defined(aio.text_blocks[3]?.list, 'list items');
+    assert.equal(list.length, 2); // the cobrowse chip item is citations, not prose
+    assert.deepEqual({ title: list[0]?.title, snippet: list[0]?.snippet }, { title: 'Grind size', snippet: 'Very fine, like table salt.' });
+    assert.deepEqual(list[1], { snippet: 'No paper filter involved.' });
+
+    // Inline citation first, strip chip second, direct link third — in DOM order.
+    assert.equal(aio.references.length, 3);
+    assert.deepEqual(
+      aio.references.map((r) => ({ index: r.index, title: r.title, link: r.link })),
+      [
+        { index: 1, title: 'Coffee Site', link: 'https://www.google.com/goto?url=REFBLOB' },
+        { index: 2, title: 'Chip Source', link: 'https://www.google.com/goto?url=CHIPBLOB' },
+        { index: 3, title: 'Direct Source', link: 'https://www.example.com/dest' },
+      ],
+    );
+    assert.equal(aio.references[2]?.source, 'example.com');
+    // The block's own title row, hidden/unexpanded markup, toasts and dialogs never leak in.
+    assert.ok(!JSON.stringify(aio).includes('junk'), 'hidden and dialog content must not parse');
+    assert.ok(aio.text_blocks.every((b) => b.snippet !== 'AI Overview'), 'the title row is not a block');
+  });
+
+  it('merges AI Overview references that resolved to one destination, then renumbers', () => {
+    const aio: AiOverview = {
+      text_blocks: [
+        { type: 'paragraph', snippet: 'Answer', reference_indexes: [1, 4] },
+        { type: 'list', list: [{ snippet: 'Item', reference_indexes: [4, 5] }] },
+      ],
+      references: [
+        { index: 1, title: 'Whole Latte Love', link: 'https://www.wholelattelove.com/', source: 'wholelattelove.com' },
+        { index: 2, title: 'Still encrypted', link: 'https://www.google.com/goto?url=CAESblob', source: undefined },
+        { index: 3, title: 'Seattle Coffee Gear', link: 'https://www.seattlecoffeegear.com/', source: 'seattlecoffeegear.com' },
+        { index: 4, title: 'Whole Latte Love (strip)', link: 'https://www.wholelattelove.com/', source: 'wholelattelove.com' },
+        { index: 5, title: 'Seattle Coffee Gear (strip)', link: 'https://www.seattlecoffeegear.com/', source: 'seattlecoffeegear.com' },
+      ],
+    };
+    dedupeAiReferences(aio);
+    // Duplicates 4/5 collapse into 1/3; the unresolved /goto ref is untouchable and kept.
+    assert.deepEqual(aio.references.map((r) => r.index), [1, 2, 3]);
+    assert.deepEqual(aio.references.map((r) => r.title), ['Whole Latte Love', 'Still encrypted', 'Seattle Coffee Gear']);
+    assert.deepEqual(aio.text_blocks[0]?.reference_indexes, [1]); // 4 -> 1, deduped
+    assert.deepEqual(aio.text_blocks[1]?.list?.[0]?.reference_indexes, [1, 3]); // 4 -> 1, 5 -> 3
+  });
+
+  it('omits ai_overview on pages without the block', () => {
+    const { data } = parseGoogleWeb(fixture('web-serp.html'), { query: 'best coffee grinder' });
+    assert.equal(data.ai_overview, undefined);
   });
 });
 

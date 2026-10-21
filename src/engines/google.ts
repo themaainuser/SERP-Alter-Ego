@@ -1,6 +1,6 @@
 import type { Config } from '../config.js';
 import { badRequest } from '../errors.js';
-import { parseGoogleWeb } from '../parsers/googleWeb.js';
+import { dedupeAiReferences, linkSource, parseGoogleWeb } from '../parsers/googleWeb.js';
 import { parseSearchNews } from '../parsers/googleNews.js';
 import { parseShopping } from '../parsers/googleShopping.js';
 import { parseImages } from '../parsers/googleImages.js';
@@ -143,7 +143,7 @@ function makeEngine(engine: string, kind: Kind, echoExtra: string[] = []): Engin
       const baseUrl = new URL(url).origin;
       return {
         googleUrl: url,
-        request: { url, readySelector: READY[kind], acceptLanguage: `${p.hl},en;q=0.8` },
+        request: { url, readySelector: READY[kind], acceptLanguage: `${p.hl},en;q=0.8`, expandAiOverview: kind === 'web' && config.googleExpandAi },
         async parse(page, { link }): Promise<ParseOutcome> {
           const start = p.start ?? 0;
           let data: object;
@@ -157,6 +157,20 @@ function makeEngine(engine: string, kind: Kind, echoExtra: string[] = []): Engin
               userAgent: config.userAgent,
               timeoutMs: 6000,
             });
+            // The AI Overview's citations get the same treatment: encrypted /goto links are
+            // resolved back to real destinations, `source` is derived where now possible,
+            // and references that resolved to one destination are merged & renumbered.
+            if (parsed.data.ai_overview) {
+              await resolveEncryptedLinks(parsed.data.ai_overview.references, {
+                enabled: config.resolveGoogleLinks,
+                userAgent: config.userAgent,
+                timeoutMs: 6000,
+              });
+              for (const ref of parsed.data.ai_overview.references) {
+                if (!ref.source) ref.source = linkSource(ref.link);
+              }
+              dedupeAiReferences(parsed.data.ai_overview);
+            }
             data = parsed.data;
             count = parsed.data.organic_results?.length ?? 0;
           } else if (kind === 'news') {

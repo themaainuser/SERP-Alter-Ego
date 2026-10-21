@@ -94,11 +94,11 @@ export class Scraper {
     return 'unknown';
   }
 
-  async #fetchOnce({ url, mode, readySelector, readyTimeoutMs, afterLoad, headers, acceptLanguage, okStatuses = [] }: PageRequest, host: string): Promise<RawPage> {
+  async #fetchOnce({ url, mode, readySelector, readyTimeoutMs, expandAiOverview, afterLoad, headers, acceptLanguage, okStatuses = [] }: PageRequest, host: string): Promise<RawPage> {
     const started = Date.now();
     const raw =
       mode === 'headless'
-        ? await this.browser.render(url, { readySelector, readyTimeoutMs, afterLoad, acceptLanguage })
+        ? await this.browser.render(url, { readySelector, readyTimeoutMs, expandAiOverview, afterLoad, acceptLanguage })
         : await this.#httpGet(url, headers, acceptLanguage);
 
     const problem = classifyPage(raw, { mode, host });
