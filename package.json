@@ -20,6 +20,8 @@
     "typecheck": "tsc -p tsconfig.json && tsc -p client/tsconfig.json --noEmit",
     "pretest": "npm run build:client",
     "test": "node --import tsx --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "capture": "node --import tsx scripts/capture.mjs",
+    "verify:live": "node --import tsx scripts/verify-live.mjs",
     "install-browser": "puppeteer browsers install chrome"
   },
   "license": "MIT",

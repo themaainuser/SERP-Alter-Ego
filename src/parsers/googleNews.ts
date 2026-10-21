@@ -1,5 +1,8 @@
 import * as cheerio from 'cheerio';
-import { absoluteUrl, clean, compact, formatNewsDate, parseError, unwrapGoogleRedirect } from './common.js';
+import { absoluteUrl, clean, compact, formatNewsDate, isEncryptedRedirect, parseError, textLines, unwrapGoogleRedirect } from './common.js';
+
+/** Relative-date lines the news tab prints verbatim ("1 day ago", "5 hours ago"). */
+const DATE_SHAPE = /^(?:\d+\s+(?:minute|min|hour|hr|day|week|month|year)s?\s+ago|just now|today|yesterday)$/i;
 
 const NEWS_BASE = 'https://news.google.com/';
 
@@ -136,15 +139,30 @@ export function parseSearchNews(html: string, { baseUrl = 'https://www.google.co
     const a = $(el);
     const link = unwrapGoogleRedirect(a.attr('href'), baseUrl);
     const title = clean(a.find('[role="heading"]').first().text());
-    if (!link || !title || seen.has(link) || /(^|\.)google\./.test(new URL(link).hostname)) return;
+    if (!link || !title || seen.has(link)) return;
+    // Brand/nav links live on google hosts and never belong in results — but story anchors
+    // are now same-host ENCRYPTED /goto redirects (the target is only recoverable by
+    // following the 302), so keep those for the engine's resolveEncryptedLinks pass instead
+    // of dropping every story. Mirrors googleWeb's treatment of the same pattern.
+    if (!isEncryptedRedirect(link) && /(^|\.)google\./.test(new URL(link).hostname)) return;
     seen.add(link);
 
     let card = a.parent();
     for (let i = 0; i < 4 && card.find('a:has([role="heading"])').length <= 1 && card.parent().length; i++) card = card.parent();
-    const sourceName = clean(card.find('.CEMjEf span, .NUnG9d span, .MgUUmf span').first().text());
+    // The class anchors below are obfuscated and churn; on the current layout they are
+    // simply absent, so each field falls back to reading the story wrapper's own text
+    // lines by SHAPE (short non-date label = source, relative-time line = date). The
+    // thumbnail also prefers the wrapper's img — a list-level `card.find('img').first()`
+    // returns story #1's thumbnail for every story once the walk has left the wrapper.
+    const story = a.parent();
+    const storyLines = textLines(story);
+    const sourceName =
+      clean(card.find('.CEMjEf span, .NUnG9d span, .MgUUmf span').first().text()) ||
+      storyLines.find((l) => l !== title && l.length > 1 && l.length < 40 && !DATE_SHAPE.test(l));
     const snippet = clean(card.find('.GI74Re, .Y3v8qd, .c0cOsd').first().text());
-    const date = clean(card.find('.OSrXXb span, .LfVVr, time').first().text());
-    const thumbnail = card.find('img').first().attr('src');
+    const date =
+      clean(card.find('.OSrXXb span, .LfVVr, time').first().text()) || storyLines.find((l) => DATE_SHAPE.test(l));
+    const thumbnail = story.find('img').first().attr('src') || card.find('img').first().attr('src');
 
     results.push(
       compact({

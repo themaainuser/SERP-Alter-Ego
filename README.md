@@ -10,9 +10,9 @@ Written in **TypeScript** (strict mode): Node.js 22+, Express 5, Cheerio, Puppet
 > | --- | --- | --- | --- |
 > | `google_finance` | yes (static HTML) | yes (all chart windows) | **Yes**: parsed real pages in both modes |
 > | `google_news` | yes (Google News RSS feed) | yes (rendered news.google.com) | RSS: **yes**. Rendered page: fixtures only |
-> | `google` (web), `google_shopping`, `google_images`, `tbm=nws` | no: Google answers script-less clients with an "enable JavaScript" wall (503 `JS_REQUIRED`) | yes | **No**: parsers are tested against hand-written fixtures only |
+> | `google` (web), `google_shopping`, `google_images`, `tbm=nws` | no: Google answers script-less clients with an "enable JavaScript" wall (503 `JS_REQUIRED`) | yes | **Yes**: all four parsers verified against live-captured pages (2026-10-21); see `test/fixtures/live/` |
 >
-> The machine this was built on is a datacenter IP and Google served it a CAPTCHA for every SERP request, so the Google Search/Images/Shopping selectors could not be checked against live markup. They anchor on structure rather than obfuscated class names (links wrapping an `<h3>`, `data-attrid`, `/imgres?imgurl=`...), but **expect to adjust them on first real use** (see [Fixing a parser](#fixing-a-parser-when-google-changes-its-markup)). On a residential IP they should be reachable.
+> These four parsers were originally written against hand-written fixtures and had never met real markup. On 2026-10-21 they were verified against real pages captured from a residential IP through the full production stack (`npm run capture`, frozen under `test/fixtures/live/`), which exposed and fixed real churn: the shopping grid had dropped `data-docid`/`h3`/`/shopping/product` links entirely, the news tab moved its story links to encrypted `/goto` redirects whose google-host guard silently dropped every story, and 97% of the images grid only ever renders as lazy `data-lpage` tiles. `npm run verify:live` measures per-selector coverage against those frozen pages, and `test/parsersLive.test.ts` fails the suite if a future change regresses them. When Google changes its markup again, re-capture and harden (see `test/fixtures/README.md`).
 >
 > **Google's `robots.txt` disallows `/search`**, so with the default `ROBOTS_POLICY=enforce`, Google Search, Images, Shopping and the News tab are refused with `403 ROBOTS_DISALLOWED` (Finance is allowed; the News RSS feed is disallowed too). To use them you must opt in by setting the policy to `warn` or `off`; that is your decision to make, and scraping Google results is against Google's Terms of Service. See [robots.txt policy](#robotstxt-policy).
 
@@ -194,14 +194,16 @@ Admin endpoints used by the UI: `GET /api/status`, `GET /api/history`, `GET|PATC
 | `npm run build` | `tsc` for the server (`dist/`) and the client (`public/app.js`). |
 | `npm run typecheck` | Strict type-check of server, tests and client without emitting. |
 | `npm test` | Builds the client, then runs every test with Node's built-in runner. |
+| `npm run capture` | Fetches live Google pages (web, shopping, images, news tab) through the full production stack and freezes them as parser fixtures under `test/fixtures/live/`. Residential IP recommended; `-- --only <name>` limits targets. |
+| `npm run verify:live` | Runs every parser against the frozen live pages and prints per-selector coverage plus per-field fill rates, so markup churn shows up as a measured gap instead of a silent zero. |
 
 The server targets Node's ESM + `NodeNext` resolution, so relative imports in `src/` and `test/` use the `.js` extension even though the files are `.ts`. Positional Google payloads (Finance) are deliberately handled as untyped rows behind shape checks; everything else, including every parser's output, is typed.
 
 ### Fixing a parser when Google changes its markup
 
-1. Reproduce the search and open `search_metadata.raw_html_file` (or call with `output=html`) to get the exact page that was parsed.
-2. Save it under `test/fixtures/`, adjust the selectors in `src/parsers/google*.ts` until a test against that fixture passes.
-3. `npm test`.
+1. Reproduce the search and open `search_metadata.raw_html_file` (or call with `output=html`) to get the exact page that was parsed — or simply `npm run capture` (residential IP; `-- --only <name>` for a single surface).
+2. `npm run verify:live` to see which anchor stopped matching (candidate vs parsed counts per block) and which fields stopped filling.
+3. Adjust the selectors in `src/parsers/google*.ts`, re-run `npm run verify:live`, then `npm test` — the frozen page is asserted by `test/parsersLive.test.ts`, so update its expectations alongside the fix.
 
 ## Tests
 
@@ -210,9 +212,9 @@ npm test          # builds the browser client, then runs all suites
 npm run typecheck # strict TypeScript check of src, test and client
 ```
 
-Runs on Node's built-in test runner via `tsx` (116 tests, roughly 20 s):
+Runs on Node's built-in test runner via `tsx`:
 
-- **Parsers** for every search type: Finance and the News RSS use **real captured Google data**; the Google SERP ones use synthetic fixtures (see `test/fixtures/README.md`). Includes malformed-input cases.
+- **Parsers** for every search type: Finance, the News RSS **and the live-captured web/shopping/images/news-tab pages** (`test/fixtures/live/`, asserted by `test/parsersLive.test.ts`) use real Google data; synthetic fixtures cover parsing logic and malformed-input cases (see `test/fixtures/README.md`).
 - **SerpApi endpoints** end to end against a fake upstream: parameters, pagination, envelope, caching, validation (400s), archive, `output=html`.
 - **Error cases:** 5xx + retry, 4xx without retry, refused connection, timeout, CAPTCHA + cooldown, JS wall, unparseable page, empty results, malformed RSS, robots.txt `enforce`/`warn`/`off`.
 - **Infrastructure:** rate limiter, robots checker, settings store, cache, HTTP fetcher limits, page guards.

@@ -6,3 +6,6 @@ public/app.js.map
 .env
 *.log
 .DS_Store
+# Untracked personal/generated artifacts at the repo root (never committed).
+Proof/
+flipbook-out/

@@ -49,9 +49,17 @@ export function parseImages(
   const seen = new Set<string>();
 
   const push = (entry: Omit<ImageResult, 'position'>): void => {
-    const key = entry.original || entry.thumbnail || entry.link;
-    if (!key || seen.has(key)) return;
-    seen.add(key);
+    // One tile can surface twice — a rendered /imgres link plus its lazy data-lpage twin
+    // (or the same page in both passes) — so dedupe on the IDENTITY fields (original URL
+    // and page link), not just the first one present: a primary hit is keyed by
+    // `original`, its twin by `link`, and a single-key check would let the twin through
+    // as a duplicate. The thumbnail is NOT an identity field — Google reuses the same
+    // tbn URL across tiles for different pages — so it only keys entries that carry
+    // neither an original nor a link (the legacy no-anchor path).
+    const identity = [entry.original, entry.link].filter((k): k is string => Boolean(k));
+    const keys = identity.length ? identity : [entry.thumbnail].filter((k): k is string => Boolean(k));
+    if (!keys.length || keys.some((k) => seen.has(k))) return;
+    keys.forEach((k) => seen.add(k));
     results.push(compact({ position: start + results.length + 1, ...entry }));
   };
 
@@ -79,8 +87,15 @@ export function parseImages(
     });
   });
 
-  if (!results.length) {
-    $('[data-lpage]').each((_, el) => {
+  // Always run the lazy pass — not only when the primary pass came up empty. A real page
+  // renders a handful of full /imgres tiles alongside ~100 lazy data-lpage tiles (the
+  // others never materialise an /imgres link at all), so gating on empty threw away 97%
+  // of the grid whenever even one /imgres tile rendered. `push`'s cross-field dedupe
+  // collapses the overlap. Innermost-only avoids an outer data-lpage wrapper claiming
+  // the first child tile's link and then blocking every child as a duplicate.
+  $('[data-lpage]')
+    .filter((_, el) => !$(el).find('[data-lpage]').length)
+    .each((_, el) => {
       const tile = $(el);
       const page = absoluteUrl(tile.attr('data-lpage'), baseUrl);
       if (!page || isGoogleHost(new URL(page).hostname)) return;
@@ -93,7 +108,6 @@ export function parseImages(
         link: page,
       });
     });
-  }
 
   if (!results.length && !hasLayout) {
     throw parseError('Google Images page was not recognised (no image grid found); the layout may have changed or the page did not finish rendering.');

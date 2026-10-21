@@ -8,6 +8,10 @@ const CARD_SELECTORS = [
   '.i0X6df',
   '.KZmu8e',
   '.LrTUQ',
+  // Current udm=28 grid: product cards are div[role="listitem"] with obfuscated classes
+  // only — no data-docid, no h3, no product anchors. Refinement chips share the role but
+  // carry no price, so the price gate below keeps only real product cards.
+  'div[role="listitem"]',
 ].join(', ');
 
 /** `shopping_results` entry. */
@@ -63,7 +67,11 @@ export function parseShopping(html: string, { baseUrl = 'https://www.google.com'
   const $ = cheerio.load(html);
   const hasLayout = $('#search, #rso, #main, #center_col, [data-docid]').length > 0;
 
-  const cards = $(CARD_SELECTORS).filter((_, el) => !$(el).parents(CARD_SELECTORS).length);
+  // Innermost-only rather than outermost: identical results on the flat legacy grids (a
+  // card never contains another card), but if the role=listitem nodes ever nest, the leaf
+  // is the product — an outer wrapper would otherwise merge several products' text into
+  // one entry keyed by the first product's title.
+  const cards = $(CARD_SELECTORS).filter((_, el) => !$(el).find(CARD_SELECTORS).length);
   const results: ShoppingResult[] = [];
   const seen = new Set<string>();
 
@@ -77,7 +85,21 @@ export function parseShopping(html: string, { baseUrl = 'https://www.google.com'
     if (!title || !price) return;
 
     const struck = card.find('s, del, [style*="line-through"]').first().text();
-    const oldPrice = struck ? findPrice(struck) : null;
+    let oldPrice = struck ? findPrice(struck) : null;
+    // Current grid marks the previous price as plain text beside the new one
+    // ("$545.00Usually $600") with no <s>/line-through markup at all, so fall back to the
+    // first line carrying a HIGHER price than the card's own — equal or lower lines are
+    // the current price or a "from" variant, never the struck one. Verified against the
+    // live capture: 8% OFF on $289.71/$315, $545.00/$600, $299.99/$390 all resolve.
+    if (!oldPrice) {
+      for (const l of lines) {
+        const p = findPrice(l);
+        if (p && p.extracted_price > price.extracted_price) {
+          oldPrice = p;
+          break;
+        }
+      }
+    }
     const anchors = card.find('a[href]').toArray().map((a) => $(a).attr('href'));
     const productHref = anchors.find((h) => /\/(shopping\/product|product)\//.test(h || '') || /[?&]prds=/.test(h || ''));
     const merchantHref = anchors
@@ -91,12 +113,16 @@ export function parseShopping(html: string, { baseUrl = 'https://www.google.com'
 
     const priceIdx = priceLine ? lines.indexOf(priceLine) : -1;
     const sourceNode = clean(card.find('.aULzUe, .IuHnof, .E5ocAb, .WJMUdc, .dD8iuc .zPEcBd').first().text());
-    const source =
+    const rawSource =
       sourceNode ||
       lines.slice(priceIdx + 1).find((l) => l.length > 1 && l.length < 40 && !findPrice(l) && !DELIVERY_RE.test(l) && !/^[0-5](?:[.,]\d)?$/.test(l) && !/^\(?[\d.,KkMm]+\)?$/.test(l) && !TAG_RE.test(l));
+    // Current grid shows the seller as "VEVOR & more" (brand plus an all-offers link);
+    // report just the seller name as SerpApi does.
+    const source = rawSource?.replace(/\s*& more$/i, '') || undefined;
     const { rating, reviews } = parseRating(card, lines);
     const img = card.find('img').first().attr('src');
-    const docId = card.attr('data-docid');
+    // Current grid has no data-docid; the product id rides on a descendant's data-cid.
+    const docId = card.attr('data-docid') ?? card.find('[data-cid]').first().attr('data-cid');
 
     results.push(
       compact({

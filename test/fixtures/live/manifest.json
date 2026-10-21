@@ -1,0 +1,29 @@
+{
+  "capturedAt": "2026-10-21T09:25:00.210Z",
+  "mode": "headless",
+  "robotsPolicy": "off",
+  "items": [
+    {
+      "name": "images",
+      "status": "ok",
+      "bytes": 2087664,
+      "mode": "headless",
+      "params": {
+        "engine": "google",
+        "tbm": "isch",
+        "q": "coffee cup"
+      }
+    },
+    {
+      "name": "news-tab",
+      "status": "ok",
+      "bytes": 335487,
+      "mode": "headless",
+      "params": {
+        "engine": "google",
+        "tbm": "nws",
+        "q": "coffee"
+      }
+    }
+  ]
+}
