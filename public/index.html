@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SERP Alter Ego</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='14' cy='14' r='9' fill='none' stroke='%234f46e5' stroke-width='4'/%3E%3Cpath d='M21 21l8 8' stroke='%234f46e5' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="14" cy="14" r="9" fill="none" stroke="currentColor" stroke-width="3.5"/><path d="M21 21l8 8" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/></svg>
+      <div>
+        <h1>SERP Alter Ego</h1>
+        <p>Self-hosted, SerpApi-compatible scraper</p>
+      </div>
+    </div>
+    <div class="topbar-controls">
+      <span id="mode-pill" class="pill" title="Current scraping mode">…</span>
+      <label class="switch" title="Render pages in a headless browser (ON) or fetch static HTML over HTTP (OFF)">
+        <input id="headless-toggle" type="checkbox" role="switch" aria-label="Headless browser">
+        <span class="track"><span class="thumb"></span></span>
+        <span class="switch-label">Headless browser</span>
+      </label>
+      <button id="open-settings" class="btn ghost" type="button">Settings</button>
+    </div>
+  </header>
+
+  <div id="notice" class="notice" hidden></div>
+
+  <main class="layout">
+    <section class="panel form-panel" aria-labelledby="search-heading">
+      <h2 id="search-heading" class="sr-only">Search</h2>
+      <div id="engine-tabs" class="tabs" role="tablist" aria-label="Search type"></div>
+      <form id="search-form" autocomplete="off">
+        <label class="field wide">
+          <span id="q-label">Query</span>
+          <input id="f-q" name="q" type="text" required maxlength="1000" placeholder="coffee">
+        </label>
+        <div id="q-examples" class="chips" hidden></div>
+        <div id="extra-fields" class="grid"></div>
+        <label class="check"><input id="f-no-cache" type="checkbox"> Bypass cache (<code>no_cache=true</code>)</label>
+        <div class="check-row">
+          <label class="field">
+            <span>Mode for this request</span>
+            <select id="f-mode">
+              <option value="">Use global setting</option>
+              <option value="false">HTTP (headless OFF)</option>
+              <option value="true">Headless browser (ON)</option>
+            </select>
+          </label>
+        </div>
+        <button id="submit" class="btn primary" type="submit">Search</button>
+      </form>
+
+      <div class="request-box">
+        <div class="request-head"><h3>API request</h3><button id="copy-curl" class="btn ghost small" type="button">Copy curl</button></div>
+        <pre id="curl" class="code" tabindex="0"></pre>
+      </div>
+
+      <div class="history">
+        <div class="request-head"><h3>Recent searches</h3><button id="refresh-history" class="btn ghost small" type="button">Refresh</button></div>
+        <ul id="history" class="history-list"></ul>
+      </div>
+    </section>
+
+    <section class="panel result-panel" aria-live="polite">
+      <div id="result-empty" class="empty">
+        <h2>Run a search</h2>
+        <p>Pick a search type, enter a query and press <strong>Search</strong>. The same request works against <code>/search.json</code> from your existing SerpApi client code.</p>
+      </div>
+      <div id="result" hidden>
+        <div id="meta" class="meta"></div>
+        <div id="error" class="error" hidden></div>
+        <div class="tabs small" role="tablist" aria-label="Result view">
+          <button id="view-visual" class="tab active" role="tab" type="button" aria-selected="true">Visual</button>
+          <button id="view-json" class="tab" role="tab" type="button" aria-selected="false">JSON</button>
+          <span class="spacer"></span>
+          <a id="raw-link" class="btn ghost small" target="_blank" rel="noopener" hidden>Raw HTML</a>
+          <button id="copy-json" class="btn ghost small" type="button">Copy JSON</button>
+        </div>
+        <div id="visual" class="visual"></div>
+        <pre id="json" class="code json" hidden></pre>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="settings-dialog">
+    <form method="dialog" id="settings-form">
+      <h2>Settings</h2>
+      <p class="muted">Changes apply immediately to new requests and are saved to <code>data/settings.json</code>. No restart needed.</p>
+
+      <label class="check big"><input id="s-headless" type="checkbox"> <span><strong>Headless browser</strong><small>Render JavaScript in Chrome. Required for Google Search, Images and Shopping.</small></span></label>
+      <label class="check big"><input id="s-fallback" type="checkbox"> <span><strong>Fall back to headless when HTTP can't render</strong><small>Only matters while headless is OFF: searches Google blocks for script-less clients are retried in the browser instead of failing.</small></span></label>
+
+      <label class="field">
+        <span>robots.txt policy</span>
+        <select id="s-robots">
+          <option value="enforce">enforce: refuse URLs robots.txt disallows</option>
+          <option value="warn">warn: scrape anyway, log and flag it</option>
+          <option value="off">off: do not check robots.txt</option>
+        </select>
+      </label>
+      <p id="robots-warning" class="warning" hidden>Google's robots.txt disallows <code>/search</code>. Scraping it is against Google's Terms of Service; you take responsibility for that choice.</p>
+
+      <div class="grid two">
+        <label class="field"><span>Min. gap between requests to one host (ms)</span><input id="s-interval" type="number" min="0" max="600000" step="100"></label>
+        <label class="field"><span>Cache TTL (seconds, 0 = off)</span><input id="s-cache" type="number" min="0" max="86400" step="30"></label>
+      </div>
+
+      <p id="settings-error" class="error" hidden></p>
+      <div class="dialog-actions">
+        <button id="settings-reset" class="btn ghost" type="button">Reset to environment defaults</button>
+        <span class="spacer"></span>
+        <button id="settings-cancel" class="btn ghost" type="button">Close</button>
+        <button id="settings-save" class="btn primary" type="submit" value="save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
