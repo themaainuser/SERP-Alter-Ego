@@ -76,12 +76,17 @@
         <div class="tabs small" role="tablist" aria-label="Result view">
           <button id="view-visual" class="tab active" role="tab" type="button" aria-selected="true">Visual</button>
           <button id="view-json" class="tab" role="tab" type="button" aria-selected="false">JSON</button>
+          <button id="view-page" class="tab" role="tab" type="button" aria-selected="false">Rendered page</button>
           <span class="spacer"></span>
           <a id="raw-link" class="btn ghost small" target="_blank" rel="noopener" hidden>Raw HTML</a>
           <button id="copy-json" class="btn ghost small" type="button">Copy JSON</button>
         </div>
         <div id="visual" class="visual"></div>
         <pre id="json" class="code json" hidden></pre>
+        <div id="page-view" hidden>
+          <div id="page-verdict" class="verdict good"></div>
+          <iframe id="page-frame" class="page-frame" title="The Google page this result was parsed from" sandbox="allow-same-origin"></iframe>
+        </div>
       </div>
     </section>
   </main>

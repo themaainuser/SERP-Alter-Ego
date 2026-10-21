@@ -180,9 +180,11 @@ interface State {
   status: Status | null;
   settings: Settings | null;
   lastBody: SerpBody | null;
-  view: 'visual' | 'json';
+  view: 'visual' | 'json' | 'page';
+  /** Path of the archived raw HTML for the last result (null when Google refused the fetch). */
+  rawPath: string | null;
 }
-const state: State = { engine: 'google', status: null, settings: null, lastBody: null, view: 'visual' };
+const state: State = { engine: 'google', status: null, settings: null, lastBody: null, view: 'visual', rawPath: null };
 
 // ---------- tiny DOM helpers ----------
 /** Look up an element that must exist in index.html. */
@@ -380,9 +382,11 @@ function showResult({ status, body, ms, mode, cache }: ResultView): void {
   const rawHref = safeHref(body.search_metadata?.raw_html_file);
   raw.hidden = !rawHref;
   if (rawHref) raw.href = new URL(rawHref).pathname;
+  state.rawPath = rawHref ? new URL(rawHref).pathname : null;
 
   $('json').textContent = JSON.stringify(body, null, 2);
   renderVisual(body);
+  renderPageView(body);
 }
 
 // ---------- visual renderers ----------
@@ -561,12 +565,56 @@ function renderFinance(v: HTMLElement, body: SerpBody): void {
 // ---------- views ----------
 function setView(view: State['view']): void {
   state.view = view;
-  $('view-visual').classList.toggle('active', view === 'visual');
-  $('view-json').classList.toggle('active', view === 'json');
-  $('view-visual').setAttribute('aria-selected', String(view === 'visual'));
-  $('view-json').setAttribute('aria-selected', String(view === 'json'));
+  for (const [id, v] of [['view-visual', 'visual'], ['view-json', 'json'], ['view-page', 'page']] as const) {
+    $(id).classList.toggle('active', view === v);
+    $(id).setAttribute('aria-selected', String(view === v));
+  }
   $('visual').hidden = view !== 'visual';
   $('json').hidden = view !== 'json';
+  $('page-view').hidden = view !== 'page';
+  // The archive is megabytes of Google HTML: load the iframe only when the tab is opened,
+  // and drop it again on tab-out so the document can be collected.
+  const frame = $<HTMLIFrameElement>('page-frame');
+  frame.src = view === 'page' && state.rawPath ? `${state.rawPath}?render=1` : 'about:blank';
+}
+
+/** The "Rendered page" verdict: is this result backed by a real Google page we can show, or not? */
+function renderPageView(body: SerpBody): void {
+  const strip = $('page-verdict');
+  clear(strip);
+  const frame = $<HTMLIFrameElement>('page-frame');
+  const rawPath = state.rawPath;
+  strip.className = `verdict ${rawPath ? 'good' : 'bad'}`;
+  if (rawPath) {
+    const counts: Array<[string, number | undefined]> = [
+      ['organic result', body.organic_results?.length],
+      ['news result', body.news_results?.length],
+      ['product', body.shopping_results?.length],
+      ['image', body.images_results?.length],
+      ['result', body.markets ? Object.values(body.markets).flat().length : undefined],
+    ];
+    const [label, n] = counts.find(([, c]) => c) ?? ['result', undefined];
+    strip.append(
+      h('b', { text: 'Real Google page' }),
+      h('span', {
+        text: n
+          ? `${n} ${label}${n === 1 ? '' : 's'} in the other views were parsed out of this exact DOM. `
+          : 'This is the exact HTML Google returned for this request. ',
+      }),
+      h('span', { class: 'as-is', text: 'Static render — scripts and Google’s no-JS redirect disabled; the raw bytes stay on Raw HTML.' }),
+    );
+  } else {
+    strip.append(
+      h('b', { text: 'No page to render' }),
+      h('span', {
+        text: body.error_code
+          ? `Google refused this request (${body.error_code}) — there is no real page behind the result.`
+          : body.error || 'Google did not return a page for this request.',
+      }),
+    );
+  }
+  frame.hidden = !rawPath;
+  frame.src = state.view === 'page' && rawPath ? `${rawPath}?render=1` : 'about:blank';
 }
 
 // ---------- status, settings, history ----------
@@ -687,6 +735,7 @@ $('settings-reset').addEventListener('click', async () => {
 });
 $('view-visual').addEventListener('click', () => setView('visual'));
 $('view-json').addEventListener('click', () => setView('json'));
+$('view-page').addEventListener('click', () => setView('page'));
 $('refresh-history').addEventListener('click', () => void refreshHistory());
 $('copy-curl').addEventListener('click', () => copy($('curl').textContent ?? '', 'curl command copied'));
 $('copy-json').addEventListener('click', () => copy($('json').textContent ?? '', 'JSON copied'));

@@ -151,7 +151,24 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
     const m = /^([a-f0-9]{24})\.(json|html)$/.exec(req.params.file);
     const found = m && service.getArchived(m[1]);
     if (!found) return next(new ScraperError('NOT_FOUND', 'Search not found. Only the most recent searches are kept in memory.'));
-    if (m[2] === 'html') return void res.type(rawContentType(found.html)).send(found.html);
+    if (m[2] === 'html') {
+      // This archive is meant to be RENDERED — the UI's "Rendered page" view frames it and
+      // raw_html_file links open it — so allow same-origin framing and the inline styles,
+      // fonts and images Google's own markup uses. Scripts stay off: the archive is static
+      // evidence of what Google returned, not a surface to run Google JS in our origin.
+      res.set({
+        'X-Frame-Options': 'SAMEORIGIN',
+        'Content-Security-Policy':
+          "default-src 'none'; style-src * 'unsafe-inline'; font-src *; img-src * data: blob:; frame-ancestors 'self'",
+      });
+      // ?render=1 is the UI's framed view. A Google SERP embeds one <noscript> block that is
+      // live markup whenever scripting is off (which a sandboxed frame is): it hides the whole
+      // page and meta-refreshes to an enable-JS redirect, so the frame would show Google's
+      // bounce text instead of the page. Stripping noscript blocks is a display transform only —
+      // the archive itself (the Raw HTML link, no query) stays byte-exact.
+      const html = req.query.render === '1' ? found.html.replace(/<noscript[\s\S]*?<\/noscript>/gi, '') : found.html;
+      return void res.type(rawContentType(found.html)).send(html);
+    }
     return void res.json(found.body);
   });
 

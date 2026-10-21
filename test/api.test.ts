@@ -200,6 +200,36 @@ describe('SerpApi-compatible endpoints (HTTP mode)', () => {
     assert.match(rss.headers.get('content-type') ?? '', /application\/xml/);
   });
 
+  it('archives byte-exact HTML and serves a framing-safe render variant without the noscript fallback', async () => {
+    // Real Google pages carry this <noscript> block: with scripting off (a sandboxed frame is)
+    // it becomes live markup that hides the whole SERP and meta-refreshes to an enable-JS redirect.
+    const noscript =
+      '<noscript><style>table,div,span,p{display:none}</style><meta content="0;url=/httpservice/retry/enablejs?sei=x" http-equiv="refresh">' +
+      '<div style="display:block">Please click <a href="/httpservice/retry/enablejs?sei=x">here</a> if you are not redirected within a few seconds.</div></noscript>';
+    const page =
+      `<html><head><title>coffee - Google Search</title>${noscript}</head>` +
+      '<body><div id="search"><div id="rso"><div class="g"><a href="https://a.example/x"><h3>Result</h3></a></div></div></div></body></html>';
+    const local = await startFakeUpstream({ '/search': html(page) });
+    const localApp = await startApp({ upstream: local });
+    try {
+      const { json } = await localApp.get('/search.json?engine=google&q=coffee');
+      const id = json.search_metadata.id;
+
+      const raw = await localApp.get(`/searches/${id}.html`);
+      assert.match(raw.text, /<noscript>/); // the archive itself stays byte-exact
+      assert.equal(raw.headers.get('x-frame-options'), 'SAMEORIGIN');
+      assert.match(raw.headers.get('content-security-policy') ?? '', /frame-ancestors 'self'/);
+      assert.match(raw.headers.get('content-security-policy') ?? '', /style-src \*/);
+
+      const view = await localApp.get(`/searches/${id}.html?render=1`);
+      assert.doesNotMatch(view.text, /noscript/i); // the framed view drops the fallback…
+      assert.match(view.text, /id="rso"/); // …and nothing else
+    } finally {
+      await localApp.stop();
+      await local.close();
+    }
+  });
+
   it('answers unknown routes with a JSON 404', async () => {
     const r = await app.get('/nope');
     assert.equal(r.status, 404);

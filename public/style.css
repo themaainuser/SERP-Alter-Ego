@@ -608,6 +608,35 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 15
 }
 .kg { padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-3); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md); font-size: var(--fs-sm); }
 
+/* Rendered page view — verdict strip over the framed raw-HTML archive */
+.verdict {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.verdict::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.verdict b { font-size: var(--fs-base); font-weight: 600; }
+.verdict .as-is { font-size: var(--fs-xs); }
+.verdict.good { background: var(--good-soft); color: color-mix(in srgb, var(--good) 72%, var(--text)); }
+.verdict.good::before, .verdict.good b { color: var(--good); }
+.verdict.bad { background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent); color: var(--bad-ink); }
+.verdict.bad::before, .verdict.bad b { color: var(--bad-ink); }
+.page-frame {
+  display: block;
+  width: 100%;
+  height: min(72vh, 880px);
+  min-height: 420px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+
 /* ============================================================
    VISUAL RESULT CONTENT
    ============================================================ */
