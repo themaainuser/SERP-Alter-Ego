@@ -463,7 +463,8 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 15
 .check.big small { display: block; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; line-height: 1.45; margin-top: 2px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-4); }
-.grid.two { gap: var(--sp-4); }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+@media (max-width: 480px) { .grid.two { grid-template-columns: minmax(0, 1fr); } }
 .grid .field { margin-bottom: 0; }
 .grid > * { min-width: 0; }        /* long values ellipsis instead of blowing out columns */
 .grid .span-2 { grid-column: 1 / -1; }
@@ -818,7 +819,9 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 15
 dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
+  overflow-y: auto; /* max-height without overflow clips Save/Close below ~600px tall */
   padding: var(--sp-6);
+  padding-bottom: 0; /* the actions row owns the bottom inset so it sits flush when stuck */
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--line);
@@ -837,14 +840,24 @@ dialog h2 {
 dialog .muted { color: var(--muted); font-size: var(--fs-sm); margin-bottom: var(--sp-3); }
 dialog .field > span { margin-top: var(--sp-4); }
 dialog .grid { margin-top: var(--sp-3); }
+/* sticky so Save/Close stay in view while a long settings form scrolls */
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-3);
   align-items: center;
-  margin-top: var(--sp-6);
-  padding-top: var(--sp-4);
+  position: sticky;
+  bottom: 0;
+  /* full-bleed past the dialog padding, so content scrolling behind stays hidden */
+  margin: var(--sp-6) calc(-1 * var(--sp-6)) 0;
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
+  background: var(--panel);
   border-top: 1px solid var(--line);
+}
+/* narrow: Reset gets its own line instead of shrinking to three */
+@media (max-width: 480px) {
+  .dialog-actions { flex-wrap: wrap; }
+  .dialog-actions #settings-reset { flex: 1 0 100%; padding-inline: 0; justify-content: flex-start; }
 }
 .dialog-actions .err { color: var(--bad); font-size: var(--fs-sm); margin-right: auto; }
 
