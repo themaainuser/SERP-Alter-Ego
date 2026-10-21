@@ -819,6 +819,34 @@ async function refreshHistory(): Promise<void> {
   }
 }
 
+// ---------- theme (system / light / dark; stored per browser, applied pre-paint by index.html) ----------
+type ThemeMode = 'system' | 'light' | 'dark';
+const THEME_KEY = 'serp-alter-ego-theme';
+const themeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyTheme(mode: ThemeMode): void {
+  const dark = mode === 'dark' || (mode === 'system' && themeQuery.matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+}
+
+function initTheme(): void {
+  let saved: string | null = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch { /* storage blocked */ }
+  const mode: ThemeMode = saved === 'light' || saved === 'dark' ? saved : 'system';
+  const seg = document.querySelector<HTMLInputElement>(`input[name="theme-mode"][value="${mode}"]`);
+  if (seg) seg.checked = true;
+  themeQuery.addEventListener('change', () => {
+    const current = document.querySelector<HTMLInputElement>('input[name="theme-mode"]:checked');
+    if (current?.value === 'system') applyTheme('system');
+  });
+  document.querySelectorAll<HTMLInputElement>('input[name="theme-mode"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      try { localStorage.setItem(THEME_KEY, input.value); } catch { /* storage blocked */ }
+      applyTheme(input.value as ThemeMode);
+    });
+  });
+}
+
 // ---------- wire up ----------
 const copy = (text: string, done: string): void => void navigator.clipboard?.writeText(text).then(() => toast(done));
 
@@ -847,6 +875,7 @@ $('refresh-history').addEventListener('click', () => void refreshHistory());
 $('copy-curl').addEventListener('click', () => copy($('curl').textContent ?? '', 'curl command copied'));
 $('copy-json').addEventListener('click', () => copy($('json').textContent ?? '', 'JSON copied'));
 
+initTheme();
 selectEngine('google');
 void refreshStatus();
 void refreshHistory();

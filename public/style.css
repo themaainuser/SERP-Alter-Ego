@@ -3,7 +3,8 @@
    Type:   Space Grotesk (display/headings) + Inter (UI/body),
            self-hosted latin variable, font-display: swap.
    Tokens: color, type, spacing, radii, depth, motion.
-   Theme:  light/dark follows the system (color-scheme).
+   Theme:  light/dark via data-theme on <html>; a topbar switch (System /
+           Light / Dark) persists the choice per browser, system by default.
    ============================================================ */
 
 /* ---------- self-hosted fonts ---------- */
@@ -94,39 +95,41 @@
   --ring: var(--accent);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f0f11;
-    --panel: #17171a;
-    --panel-2: #1d1d21;
-    --text: #ededef;
-    --muted: #a3a3ad;   /* lighter + a touch bolder against dark */
-    --faint: #8a8a93;
-    --line: #26262b;
-    --line-strong: #36363d;
+/* dark palette — data-theme is resolved pre-paint by the head script in
+   index.html (stored mode or system preference), so one block, no duplication */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f0f11;
+  --panel: #17171a;
+  --panel-2: #1d1d21;
+  --text: #ededef;
+  --muted: #a3a3ad;   /* lighter + a touch bolder against dark */
+  --faint: #8a8a93;
+  --line: #26262b;
+  --line-strong: #36363d;
 
-    --accent: #9a95ff;
-    --accent-ink: #14141a;
-    --accent-soft: #26244d;
-    --accent-softer: #1c1b33;
+  --accent: #9a95ff;
+  --accent-ink: #14141a;
+  --accent-soft: #26244d;
+  --accent-softer: #1c1b33;
 
-    --good: #4ade9a;
-    --good-soft: #10281c;
-    --bad: #ff8080;
-    --bad-soft: #2c1416;
-    --bad-ink: #ffb4b4;
-    --warn: #f6b455;
-    --warn-soft: #2a2010;
-    --warn-ink: #f6c987;
+  --good: #4ade9a;
+  --good-soft: #10281c;
+  --bad: #ff8080;
+  --bad-soft: #2c1416;
+  --bad-ink: #ffb4b4;
+  --warn: #f6b455;
+  --warn-soft: #2a2010;
+  --warn-ink: #f6c987;
 
-    --code-bg: #0c0d16;
-    --code-ink: #dfe3ff;
+  --code-bg: #0c0d16;
+  --code-ink: #dfe3ff;
 
-    --shadow-1: none;
-    --shadow-2: 0 10px 30px -16px rgb(0 0 0 / 0.62);
-    --shadow-3: 0 30px 70px -30px rgb(0 0 0 / 0.82);
-  }
+  --shadow-1: none;
+  --shadow-2: 0 10px 30px -16px rgb(0 0 0 / 0.62);
+  --shadow-3: 0 30px 70px -30px rgb(0 0 0 / 0.82);
 }
+:root[data-theme="light"] { color-scheme: light; }
 
 /* ---------- reset + base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
@@ -259,6 +262,32 @@ code {
 .switch input:focus-visible + .track { outline: 2px solid var(--ring); outline-offset: 2px; }
 .switch input:disabled + .track { opacity: 0.5; cursor: not-allowed; }
 .switch-label { color: var(--muted); font-size: var(--fs-sm); cursor: pointer; }
+
+/* ---------- theme segmented control (radios hidden; labels are the UI) ---------- */
+.theme-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--panel);
+}
+.theme-seg input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.theme-seg label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px; height: 23px;
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.theme-seg label:hover { color: var(--text); }
+.theme-seg input:checked + label { background: var(--accent-soft); color: var(--accent); }
+.theme-seg input:focus-visible + label { outline: 2px solid var(--ring); outline-offset: 1px; }
+.theme-seg svg { width: 14px; height: 14px; display: block; }
 
 /* ============================================================
    BUTTONS
