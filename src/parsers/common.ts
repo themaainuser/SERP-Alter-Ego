@@ -27,7 +27,14 @@ export function absoluteUrl(href: string | null | undefined, base: string): stri
   }
 }
 
-export const isGoogleHost = (host: string): boolean => /(^|\.)google\.[a-z.]+$/i.test(host) || /(^|\.)gstatic\.com$/i.test(host);
+/**
+ * Google's own hosts: `google.com`, `google.cat` or a country domain (`google.de`, `google.co.uk`,
+ * `google.com.au`), plus subdomains and `gstatic.com`. The suffix is anchored on purpose — a loose
+ * `google\.[a-z.]+` also matches `google.attacker.com`, and links that pass this check are fetched
+ * server-side (see resolveLinks.ts).
+ */
+export const GOOGLE_HOST = /^(?:[a-z0-9-]+\.)*google\.(?:com|cat|[a-z]{2}|(?:co|com)\.[a-z]{2})$/i;
+export const isGoogleHost = (host: string): boolean => GOOGLE_HOST.test(host) || /(^|\.)gstatic\.com$/i.test(host);
 
 /** Google wraps outbound links as /url?q=<target>; return the real target when present. */
 export function unwrapGoogleRedirect(href: string | null | undefined, base = 'https://www.google.com'): string | null {

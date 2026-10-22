@@ -45,7 +45,7 @@ cp .env.example .env
 npm start
 ```
 
-By default the service listens on `127.0.0.1` only. Because there is no authentication, set `HOST=0.0.0.0` only on networks you trust. While bound to loopback, requests with a non-loopback `Host` header are refused (DNS-rebinding protection), and settings changes require a JSON content type.
+By default the service listens on `127.0.0.1` only. Because there is no authentication, set `HOST=0.0.0.0` only on networks you trust (the server logs a warning when you do). While bound to loopback, requests with a non-loopback `Host` header are refused (DNS-rebinding protection). Cross-site browser requests other than a visible top-level navigation — an `<img>`, `fetch` or hidden `<iframe>` on some other website — are refused with `403 FORBIDDEN_CROSS_SITE`, so a page you visit cannot make your machine scrape Google. Settings changes require a JSON content type. See [SECURITY.md](SECURITY.md) for the full threat model.
 
 ## Swapping it in for SerpApi
 
@@ -145,6 +145,7 @@ Errors use SerpApi's `{"error": "message"}` shape plus an `error_code`, with a m
 | --- | --- | --- |
 | 400 | `INVALID_PARAMETER` | Missing `q`, bad `num`/`hl`/`gl`/`google_domain`/…, unsupported `engine` |
 | 403 | `ROBOTS_DISALLOWED` | robots.txt disallows the URL and the policy is `enforce` |
+| 403 | `FORBIDDEN_HOST`, `FORBIDDEN_CROSS_SITE` | Non-loopback `Host` header while bound to loopback; a cross-site browser request that is not a top-level navigation |
 | 404 | `NOT_FOUND` | Unknown route or archived search |
 | 429 | `UPSTREAM_BLOCKED` | CAPTCHA / HTTP 429 from Google. The host is paused for 5 minutes (`BLOCK_COOLDOWN_MS`); further requests fail fast with `Retry-After` instead of making the block worse |
 | 429 | `RATE_LIMITED` | Too many searches queued (`RATE_MAX_QUEUE`) |
@@ -184,7 +185,7 @@ src/                  server (TypeScript, compiled to dist/)
   service/            searchService: mode selection, cache, fallback, SerpApi envelope, archive, history
   serpapi/params.ts   typed parameter reader, uule encoding
 client/app.ts         web UI logic (compiled to public/app.js by tsc; no bundler)
-public/               static UI: index.html, style.css, generated app.js (git-ignored)
+public/               static UI: index.html, style.css, theme-init.js, fonts/, generated app.js (git-ignored)
 test/                 node:test suites written in TypeScript (run through tsx)
 ```
 
@@ -237,3 +238,17 @@ Authentication, `async` searches, `/account` and `/locations.json`, `device=mobi
 - **`429 UPSTREAM_BLOCKED`**: Google served a CAPTCHA. The real fix is a different IP — set `PROXY_URL` (a fresh residential IP is challenged far less often). Otherwise: wait out the cooldown, raise `RATE_MIN_INTERVAL_MS`, or run once with `BROWSER_HEADFUL=true` and headless ON to solve it by hand in the visible browser (the scrape continues once you do; with a persistent `CHROME_USER_DATA_DIR` the solve carries over, on isolated contexts it only helps as a diagnostic).
 - **`502 PARSE_ERROR`**: Google's markup changed; see "Fixing a parser".
 - Logs go to stderr (`LOG_LEVEL=debug` shows per-phase browser timings; `LOG_FORMAT=json` for log shippers). `api_key` values are redacted.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). CI runs `npm run typecheck` and `npm test` on Node 22 and 24 for every push and pull request.
+
+## Security
+
+Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md), which also describes what the service does and does not protect against.
+
+## License and disclaimer
+
+MIT, see [LICENSE](LICENSE). The bundled Inter and Space Grotesk fonts are under the SIL Open Font License; see [public/fonts/OFL.txt](public/fonts/OFL.txt).
+
+This project is not affiliated with, endorsed by or sponsored by Google or SerpApi; their names are used only to describe compatibility. Scraping Google results is against Google's Terms of Service, and you are responsible for how you use this software.

@@ -329,8 +329,11 @@ function currentParams(): Record<string, string> {
   return params;
 }
 
+/** Quote for a POSIX shell. Double quotes would still expand `$(…)`, backticks and `$VAR` in a copied query. */
+const shellQuote = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
+
 function updateCurl(): void {
-  const lines = Object.entries(currentParams()).map(([k, v]) => `  --data-urlencode "${k}=${v.replaceAll('"', '\\"')}"`);
+  const lines = Object.entries(currentParams()).map(([k, v]) => `  --data-urlencode ${shellQuote(`${k}=${v}`)}`);
   $('curl').textContent = `curl -G "${location.origin}/search.json" \\\n${lines.join(' \\\n')}`;
 }
 

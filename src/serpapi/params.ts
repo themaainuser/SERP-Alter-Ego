@@ -63,8 +63,10 @@ export function reader(raw: Query = {}): ParamReader {
 
 const HL = /^[a-z]{2,3}(-[A-Za-z]{2,4}|-\d{3})?$/;
 const GL = /^[a-zA-Z]{2}$/;
-// Only Google's own domains: this value ends up in an outbound URL.
-const GOOGLE_DOMAIN = /^(www\.)?google\.[a-z]{2,3}(\.[a-z]{2})?$/i;
+// Only Google's own domains: this value ends up in an outbound URL. Google serves search from
+// google.com, google.cat and country domains (google.de, google.co.uk, google.com.au); a looser
+// `[a-z]{2,3}` TLD would also admit third-party domains such as google.xyz.
+const GOOGLE_DOMAIN = /^(www\.)?google\.(com|cat|[a-z]{2}|(co|com)\.[a-z]{2})$/i;
 
 export type CommonParams = Pick<BaseParams, 'hl' | 'gl' | 'google_domain' | 'device' | 'no_cache' | 'output' | 'headless'>;
 

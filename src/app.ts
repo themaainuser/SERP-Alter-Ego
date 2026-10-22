@@ -26,6 +26,14 @@ declare module 'express-serve-static-core' {
 // `src/` and `dist/` both sit directly under the project root, which holds the static UI in `public/`.
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+const REQUEST_ID = /^[\w.:-]{1,128}$/;
+/**
+ * Raw Google HTML (archives, `output=html`) is static evidence of what Google returned, never a
+ * surface to run Google's JS in our origin: no scripts, no frames, no form posts. Inline styles,
+ * fonts and images stay allowed so the page still renders.
+ */
+const RAW_HTML_CSP =
+  "default-src 'none'; style-src * 'unsafe-inline'; font-src *; img-src * data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
 const startedAt = Date.now();
 
 /** Dependencies that touch the network or a browser, replaceable in tests. */
@@ -99,7 +107,9 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
   app.set('json spaces', 2);
 
   app.use((req, res, next) => {
-    req.id = req.get('x-request-id') || randomUUID();
+    // A client-supplied id is echoed in a header and logged, so only accept a short, plain token.
+    const clientId = req.get('x-request-id');
+    req.id = clientId && REQUEST_ID.test(clientId) ? clientId : randomUUID();
     res.set('X-Request-Id', req.id);
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('X-Frame-Options', 'DENY');
@@ -122,6 +132,17 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
     });
   }
 
+  // Any web page the user visits can fire `<img src="http://127.0.0.1:3000/search?q=…">` at this
+  // service, making the machine scrape Google (and burn its IP reputation) without the user knowing.
+  // Browsers label such requests `Sec-Fetch-Site: cross-site`; refuse them unless they are a
+  // top-level navigation the user can see (a hidden <iframe> is a navigation too, but its
+  // destination is `iframe`, not `document`). Non-browser clients (curl, SDKs) send no such header.
+  app.use((req, res, next) => {
+    if (req.get('sec-fetch-site') !== 'cross-site') return next();
+    if (req.get('sec-fetch-mode') === 'navigate' && req.get('sec-fetch-dest') === 'document') return next();
+    return res.status(403).json({ error: 'Cross-site requests are not allowed.', error_code: 'FORBIDDEN_CROSS_SITE' });
+  });
+
   const baseUrlOf = (req: Request): string => config.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
 
   const rawContentType = (html: string): string => (html.trimStart().startsWith('<?xml') ? 'application/xml' : 'text/html');
@@ -133,6 +154,7 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
     res.set('X-Cache', result.cached ? 'HIT' : 'MISS');
     const wantsHtml = forcedOutput === 'html' || String(raw.output).toLowerCase() === 'html';
     if (wantsHtml) {
+      res.set('Content-Security-Policy', RAW_HTML_CSP);
       res.type(rawContentType(result.html)).send(result.html);
       return;
     }
@@ -156,13 +178,8 @@ export function createApp({ config = loadConfig(), logger, overrides = {} }: App
     if (m[2] === 'html') {
       // This archive is meant to be RENDERED — the UI's "Rendered page" view frames it and
       // raw_html_file links open it — so allow same-origin framing and the inline styles,
-      // fonts and images Google's own markup uses. Scripts stay off: the archive is static
-      // evidence of what Google returned, not a surface to run Google JS in our origin.
-      res.set({
-        'X-Frame-Options': 'SAMEORIGIN',
-        'Content-Security-Policy':
-          "default-src 'none'; style-src * 'unsafe-inline'; font-src *; img-src * data: blob:; frame-ancestors 'self'",
-      });
+      // fonts and images Google's own markup uses. Scripts stay off (see RAW_HTML_CSP).
+      res.set({ 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': RAW_HTML_CSP });
       // ?render=1 is the UI's framed view. A Google SERP embeds one <noscript> block that is
       // live markup whenever scripting is off (which a sandboxed frame is): it hides the whole
       // page and meta-refreshes to an enable-JS redirect, so the frame would show Google's

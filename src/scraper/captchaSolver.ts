@@ -165,16 +165,22 @@ function injectTokenAndSubmit(token: string): boolean {
   try {
     const clients = g.window && g.window.___grecaptcha_cfg && g.window.___grecaptcha_cfg.clients;
     if (clients) {
+      // Only the widget's `callback` entry is invoked — a function, or the name of a global one.
+      // The client tree also holds unrelated functions (DOM methods, reset/execute helpers);
+      // calling every function in it with the token could reset the widget or worse.
       const walk = (obj: any, depth: number): void => {
         if (!obj || typeof obj !== "object" || depth > 8) return;
         for (const key of Object.keys(obj)) {
           const value = obj[key];
-          if (typeof value === "function") {
-            try {
-              value(token);
-              fired = true;
-            } catch {
-              /* not the callback — keep looking */
+          if (key === "callback") {
+            const fn = typeof value === "function" ? value : typeof value === "string" ? g.window[value] : null;
+            if (typeof fn === "function") {
+              try {
+                fn(token);
+                fired = true;
+              } catch {
+                /* a throwing callback — fall back to the form submit below */
+              }
             }
           } else if (value && typeof value === "object") {
             walk(value, depth + 1);

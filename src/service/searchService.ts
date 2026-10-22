@@ -165,7 +165,10 @@ export class SearchService {
       return `${baseUrl}/search.json?${qs}`;
     };
 
-    const cacheKey = JSON.stringify([engine.id, mode, echo]);
+    // baseUrl is part of the key because the cached body embeds it (json_endpoint, pagination
+    // links): without it, a client reaching the service under another Host would be handed links
+    // built for the first client's Host.
+    const cacheKey = JSON.stringify([engine.id, mode, echo, baseUrl]);
     const ttlMs = settings.cacheTtlSeconds * 1000;
     if (!params.no_cache && ttlMs > 0) {
       const hit = this.cache.get(cacheKey);

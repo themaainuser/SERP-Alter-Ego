@@ -15,6 +15,7 @@ import { HttpFetcher } from '../src/scraper/httpFetcher.js';
 import { loadConfig } from '../src/config.js';
 import { redactUrl } from '../src/logger.js';
 import { encodeUule } from '../src/serpapi/params.js';
+import { isEncryptedRedirect, isGoogleHost } from '../src/parsers/common.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -240,5 +241,22 @@ describe('misc units', () => {
 
   it('rejects bad environment values for the robots policy at startup', () => {
     assert.throws(() => new SettingsStore({ defaults: loadConfig({ ROBOTS_POLICY: 'nope' }).settings }), { code: 'INVALID_PARAMETER' });
+  });
+
+  it('clamps negative history/archive sizes (a negative history size used to hang the first search)', () => {
+    const config = loadConfig({ NODE_ENV: 'test', HISTORY_SIZE: '-1', ARCHIVE_SIZE: '-5' });
+    assert.equal(config.historySize, 0);
+    assert.equal(config.archiveSize, 0);
+  });
+
+  it('isGoogleHost accepts Google domains only, not look-alikes that are fetched server-side', () => {
+    for (const host of ['google.com', 'www.google.com', 'news.google.com', 'www.google.co.uk', 'google.com.au', 'google.de', 'google.cat', 'encrypted-tbn0.gstatic.com']) {
+      assert.equal(isGoogleHost(host), true, host);
+    }
+    for (const host of ['google.attacker.com', 'www.google.evil.example', 'notgoogle.com', 'google.xyz', 'google.co.uk.evil', 'gstatic.com.evil']) {
+      assert.equal(isGoogleHost(host), false, host);
+    }
+    assert.equal(isEncryptedRedirect('https://google.attacker.com/goto?url=abc'), false);
+    assert.equal(isEncryptedRedirect('https://www.google.com/goto?url=abc'), true);
   });
 });

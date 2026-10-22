@@ -16,8 +16,8 @@ import type { Logger } from "../logger.js";
  * `setGlobalDispatcher` is used deliberately: Node's built-in `fetch` **rejects** a per-request
  * `dispatcher` option (`UND_ERR_INVALID_ARG`) but **honours** the global one — and setting it
  * once covers every fetch (HttpFetcher + resolver) with no per-call threading. Verified
- * empirically; see PLAN-proxies-stealth.md. It is a no-op when `PROXY_URL` is unset, so tests
- * and direct connections are unaffected.
+ * empirically (a dead proxy turns every fetch into ECONNREFUSED). It is a no-op when `PROXY_URL`
+ * is unset, so tests and direct connections are unaffected.
  */
 
 /** Parse a proxy string into a URL. Tolerates a bare `host:port` (treated as `http://`). */

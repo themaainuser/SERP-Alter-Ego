@@ -24,6 +24,9 @@ const server = instance.app.listen(config.port, config.host, () => {
     headless: s.headless,
     robotsPolicy: s.robotsPolicy,
   });
+  if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(config.host)) {
+    logger.warn('Listening on a non-loopback address with NO authentication: anyone who can reach this port can run searches and change settings. Only do this on a network you trust.', { host: config.host });
+  }
 });
 
 server.on('error', (err) => {

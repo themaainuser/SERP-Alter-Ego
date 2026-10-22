@@ -24,6 +24,14 @@
     "verify:live": "node --import tsx scripts/verify-live.mjs",
     "install-browser": "puppeteer browsers install chrome"
   },
+  "keywords": [
+    "serp",
+    "serpapi",
+    "google",
+    "scraper",
+    "puppeteer",
+    "self-hosted"
+  ],
   "license": "MIT",
   "private": true,
   "dependencies": {

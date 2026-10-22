@@ -93,6 +93,10 @@ describe('SerpApi-compatible endpoints (HTTP mode)', () => {
     assert.deepEqual({ num: q.num, start: q.start, safe: q.safe, tbs: q.tbs }, { num: '20', start: '20', safe: 'active', tbs: 'qdr:d' });
     assert.equal(r.json.organic_results[0].position, 21);
     assert.equal(r.json.serpapi_pagination.current, 2);
+    // From page 2 the way back to page 1 must be listed (and the current page must not be).
+    assert.deepEqual(Object.keys(r.json.serpapi_pagination.other_pages), ['1', '3', '4', '5', '6', '7', '8', '9', '10']);
+    assert.match(r.json.serpapi_pagination.other_pages['1'], /start=0/);
+    assert.doesNotMatch(r.json.pagination.other_pages['1'], /start=/);
   });
 
   it('google: tbm switches to the news, shopping and images tabs', async () => {
@@ -323,6 +327,8 @@ describe('request validation', () => {
     ['bad hl', '/search.json?q=x&hl=english-us!', /Invalid `hl`/],
     ['bad gl', '/search.json?q=x&gl=usa', /Invalid `gl`/],
     ['non-google domain (SSRF guard)', '/search.json?q=x&google_domain=evil.example.com', /google_domain/],
+    ['third-party google.<gTLD> domain (SSRF guard)', '/search.json?q=x&google_domain=google.xyz', /google_domain/],
+    ['google.<cc> under another domain (SSRF guard)', '/search.json?q=x&google_domain=google.co.uk.evil', /google_domain/],
     ['mobile device', '/search.json?q=x&device=mobile', /desktop/],
     ['bad safe', '/search.json?q=x&safe=maybe', /`safe`/],
     ['bad no_cache', '/search.json?q=x&no_cache=perhaps', /`no_cache`/],
@@ -347,6 +353,9 @@ describe('request validation', () => {
     const r = await app.get('/search.json?q=x&google_domain=google.co.uk');
     assert.equal(r.status, 200);
     assert.equal(r.json.search_parameters.google_domain, 'google.co.uk');
+    for (const domain of ['google.de', 'google.com.au', 'www.google.cat']) {
+      assert.equal((await app.get(`/search.json?q=x&no_cache=true&google_domain=${domain}`)).status, 200, domain);
+    }
   });
 });
 
@@ -553,6 +562,23 @@ describe('caching and rate limiting', () => {
     assert.equal((await app.get('/search.json?q=coffee')).headers.get('x-cache'), 'MISS');
   });
 
+  it('never serves a cached body whose links were built for another Host', async () => {
+    upstream = await startFakeUpstream(standardRoutes());
+    app = await startApp({ upstream, env: { CACHE_TTL_SECONDS: '60' } });
+    await app.get('/search.json?q=coffee');
+    const port = new URL(app.base).port;
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = http.request(`${app.base}/search.json?q=coffee`, { headers: { Host: `localhost:${port}` } }, (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => resolve(text));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.ok(JSON.parse(body).search_metadata.json_endpoint.startsWith(`http://localhost:${port}/`));
+  });
+
   it('spaces upstream requests by the configured minimum interval', async () => {
     upstream = await startFakeUpstream(standardRoutes());
     app = await startApp({ upstream, env: { RATE_MIN_INTERVAL_MS: '150' } });
@@ -652,5 +678,47 @@ describe('admin API, status and safety', () => {
       req.end();
     });
     assert.equal(status, 403);
+  });
+
+  it('refuses cross-site subresource requests (drive-by scraping guard) but allows top-level navigation', async () => {
+    // node:http, not fetch: undici overwrites Sec-Fetch-Mode with its own value.
+    const statusFor = (path: string, headers: Record<string, string>) =>
+      new Promise<number | undefined>((resolve, reject) => {
+        const req = http.request(`${app.base}${path}`, { headers }, (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    const search = '/search.json?engine=google_finance&q=GOOGL:NASDAQ';
+    const crossSite = (mode: string, dest: string) => ({ 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': mode, 'sec-fetch-dest': dest });
+
+    assert.equal(await statusFor(search, crossSite('no-cors', 'image')), 403, '<img>');
+    assert.equal(await statusFor(search, crossSite('cors', 'empty')), 403, 'fetch()');
+    assert.equal(await statusFor(search, crossSite('navigate', 'iframe')), 403, 'a hidden iframe is a navigation too');
+    assert.equal(upstream.hits.length, 0, 'nothing reached Google');
+
+    assert.equal(await statusFor('/health', crossSite('navigate', 'document')), 200, 'visible top-level navigation');
+    assert.equal(await statusFor('/health', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' }), 200, 'the web UI itself');
+    assert.equal(await statusFor('/health', {}), 200, 'non-browser clients');
+  });
+
+  it('echoes a well-formed X-Request-Id and replaces a malformed one', async () => {
+    const ok = await app.get('/health', { headers: { 'x-request-id': 'trace-123.abc' } });
+    assert.equal(ok.headers.get('x-request-id'), 'trace-123.abc');
+    const bad = await app.get('/health', { headers: { 'x-request-id': `${'x'.repeat(200)}` } });
+    assert.match(String(bad.headers.get('x-request-id')), /^[0-9a-f-]{36}$/);
+  });
+
+  it('serves raw Google HTML (output=html and the archive) under a script-free CSP', async () => {
+    const r = await app.get('/search.json?engine=google_finance&q=GOOGL:NASDAQ&output=html');
+    assert.equal(r.status, 200);
+    const csp = String(r.headers.get('content-security-policy'));
+    assert.match(csp, /default-src 'none'/);
+    assert.doesNotMatch(csp, /script-src/);
+    const json = await app.get('/search.json?engine=google_finance&q=GOOGL:NASDAQ');
+    const archived = await app.get(new URL(json.json.search_metadata.raw_html_file).pathname);
+    assert.equal(archived.headers.get('content-security-policy'), csp);
   });
 });

@@ -1,13 +1,23 @@
 node_modules/
-data/
 dist/
+coverage/
+*.tsbuildinfo
 public/app.js
 public/app.js.map
-.env
 *.log
 .DS_Store
-# Untracked personal/generated artifacts at the repo root (never committed).
+
+# Local configuration and secrets (PROXY_URL credentials, CAPTCHA_SOLVER_API_KEY, ...).
+.env
+.env.*
+!.env.example
+
+# Runtime data: persisted settings (DATA_DIR) and saved searches (ARCHIVE_DIR).
+data/
+archive/
+
+# Local-only artifacts (browser profiles, screen recordings, frame dumps). A browser profile
+# holds cookies and logins: never commit one.
 Proof/
 flipbook-out/
-archive/
 .mcp-profile/

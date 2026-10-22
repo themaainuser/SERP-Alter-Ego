@@ -136,7 +136,15 @@ export class SettingsStore {
   reset(): SettingsValues {
     const previous = this.snapshot();
     this.values = { ...this.defaults };
-    if (this.filePath) fs.rmSync(this.filePath, { force: true });
+    // Like persist(): a file we cannot delete must not skip emit(), or listeners would keep
+    // acting on the old values (cache not cleared, browser not released).
+    if (this.filePath) {
+      try {
+        fs.rmSync(this.filePath, { force: true });
+      } catch (err) {
+        this.logger?.warn('Could not delete persisted settings', { error: err });
+      }
+    }
     this.emit(previous);
     return this.snapshot();
   }

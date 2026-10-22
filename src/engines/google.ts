@@ -115,9 +115,10 @@ function paginate(p: GoogleParams, { count, config, link, googleUrl }: PaginateC
   const size = p.num ?? config.defaults.num;
   const start = p.start ?? 0;
   const current = Math.floor(start / size) + 1;
+  // Pages 1-10 minus the current one: from page 2 onwards page 1 must stay reachable.
   const other = (fn: (start: number) => string): Record<number, string> =>
     Object.fromEntries(
-      Array.from({ length: 9 }, (_, i) => i + 2)
+      Array.from({ length: 10 }, (_, i) => i + 1)
         .filter((n) => n !== current)
         .map((n) => [n, fn((n - 1) * size)]),
     );
