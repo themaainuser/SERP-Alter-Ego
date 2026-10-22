@@ -170,6 +170,72 @@ describe('headless mode toggle (fake browser)', () => {
   });
 });
 
+describe('DOM capture retry (fake browser)', () => {
+  let upstream!: FakeUpstream;
+  let app!: TestApp;
+  afterEach(async () => {
+    await app?.stop();
+    await upstream?.close();
+  });
+
+  it('retries the DOM capture when a navigation destroys the execution context mid-read', async () => {
+    upstream = await startFakeUpstream({ '/search': html(webSerp) });
+    let captures = 0;
+    const fake = fakeLauncher(() => {
+      captures += 1;
+      if (captures === 1) throw new Error('Execution context was destroyed, most likely because of a navigation.');
+      return webSerp;
+    });
+    app = await startApp({ upstream, overrides: { launcher: fake.launcher } });
+    const r = await app.get('/search.json?q=coffee&headless=true');
+    assert.equal(r.status, 200, r.text.slice(0, 200));
+    assert.equal(r.json.search_metadata.scraper_mode, 'headless');
+    assert.equal(r.json.organic_results.length, 3, 'the settled DOM was parsed after the retry');
+    assert.equal(captures, 2, 'one racing read, one successful retry');
+  });
+
+  it('fails with INTERNAL_ERROR when the capture keeps destroying the context', async () => {
+    upstream = await startFakeUpstream({ '/search': html(webSerp) });
+    const fake = fakeLauncher(() => {
+      throw new Error('Execution context was destroyed, most likely because of a navigation.');
+    });
+    app = await startApp({ upstream, overrides: { launcher: fake.launcher } });
+    const r = await app.get('/search.json?q=coffee&headless=true');
+    assert.equal(r.status, 500);
+    assert.equal(r.json.error_code, 'INTERNAL_ERROR');
+  });
+
+  it('waits for the document to finish parsing before reading it', async () => {
+    upstream = await startFakeUpstream({ '/search': html(webSerp) });
+    const events: string[] = [];
+    const fake = fakeLauncher(
+      () => {
+        events.push('content');
+        return webSerp;
+      },
+      { onWaitForFunction: () => { events.push('parse-gate'); } },
+    );
+    app = await startApp({ upstream, overrides: { launcher: fake.launcher } });
+    const r = await app.get('/search.json?q=coffee&headless=true');
+    assert.equal(r.status, 200, r.text.slice(0, 200));
+    assert.equal(r.json.organic_results.length, 3);
+    assert.equal(events[0], 'parse-gate', 'the parse gate must run before the first DOM read');
+  });
+
+  it('still reads the page when the parse gate itself is interrupted', async () => {
+    upstream = await startFakeUpstream({ '/search': html(webSerp) });
+    const fake = fakeLauncher(() => webSerp, {
+      onWaitForFunction: () => {
+        throw new Error('Execution context was destroyed, most likely because of a navigation.');
+      },
+    });
+    app = await startApp({ upstream, overrides: { launcher: fake.launcher } });
+    const r = await app.get('/search.json?q=coffee&headless=true');
+    assert.equal(r.status, 200, r.text.slice(0, 200));
+    assert.equal(r.json.organic_results.length, 3, 'a failed gate falls through to the plain read');
+  });
+});
+
 const chrome = await findChrome();
 const chromePath = chrome ?? '';
 

@@ -20,7 +20,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       # The runner image ships Google Chrome; the real-browser suites use it with --no-sandbox.
-      - run: npm test
+      # xvfb-run gives the headful CAPTCHA suite (BROWSER_HEADFUL=true) a virtual X display —
+      # the runner has no screen, and Chrome refuses to start headful without one.
+      - run: xvfb-run -a npm test
         env:
           CHROME_PATH: /usr/bin/google-chrome
       - run: npm audit --omit=dev --audit-level=high

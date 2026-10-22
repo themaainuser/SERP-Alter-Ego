@@ -1,6 +1,8 @@
+import http from 'node:http';
 import { type App, type AppOverrides, createApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
 import type { BrowserLauncher } from '../../src/scraper/browser.js';
+import { listenSafe } from './safePort.js';
 
 /** Parsed API response. `json` is deliberately `any`: tests probe deep into SerpApi-shaped payloads. */
 export interface ApiResponse {
@@ -32,6 +34,7 @@ export interface StartAppOptions {
 export async function startApp({ upstream, env = {}, overrides = {} }: StartAppOptions = {}): Promise<TestApp> {
   const config = loadConfig({
     NODE_ENV: 'test',
+    LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? 'silent', // TEST_LOG_LEVEL=error surfaces swallowed server errors while debugging
     RATE_MIN_INTERVAL_MS: '0',
     RATE_JITTER_MS: '0',
     HTTP_RETRY_BASE_MS: '1',
@@ -42,12 +45,9 @@ export async function startApp({ upstream, env = {}, overrides = {} }: StartAppO
     ...env,
   });
   const instance = createApp({ config, overrides });
-  const server = await new Promise<ReturnType<typeof instance.app.listen>>((resolve) => {
-    const s = instance.app.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('test app failed to bind');
-  const base = `http://127.0.0.1:${address.port}`;
+  const server = http.createServer(instance.app);
+  const port = await listenSafe(server);
+  const base = `http://127.0.0.1:${port}`;
   return {
     ...instance,
     base,
@@ -86,7 +86,10 @@ export interface FakeBrowserState {
  * A launcher that returns an in-memory fake browser; `render(url)` returns the DOM to serve.
  * Implements only the Puppeteer surface BrowserManager uses, so it is asserted to `BrowserLauncher` once here.
  */
-export function fakeLauncher(render: (url: string) => string): { launcher: BrowserLauncher; state: FakeBrowserState } {
+export function fakeLauncher(
+  render: (url: string) => string,
+  hooks: { onWaitForFunction?: () => void } = {},
+): { launcher: BrowserLauncher; state: FakeBrowserState } {
   const state: FakeBrowserState = { launches: 0, renders: [], closed: 0 };
   const launcher = async () => {
     state.launches++;
@@ -108,6 +111,9 @@ export function fakeLauncher(render: (url: string) => string): { launcher: Brows
               return { status: () => 200 };
             },
             waitForSelector: async () => {},
+            waitForFunction: async () => {
+              hooks.onWaitForFunction?.();
+            },
             url: () => current,
             content: async () => render(current),
             evaluate: async () => true,

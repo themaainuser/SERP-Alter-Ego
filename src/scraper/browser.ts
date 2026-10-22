@@ -46,6 +46,15 @@ export interface RenderOptions {
  * appear (Google streams the block in after the results), clicks it, then waits until the
  * page text stops growing (or ~8s, whichever first). Returns true when a control was clicked.
  */
+/**
+ * Give-up budget for waiting on a racing navigation's document to finish parsing before a
+ * capture reads it. Correctness comes from the `document.readyState` check, not from this
+ * number: the budget only bounds how long a broken page can stall the read. When it expires
+ * the capture falls back to reading whatever is there — the behavior from before this
+ * budget existed.
+ */
+const CAPTURE_SETTLE_BUDGET_MS = 5000;
+
 const EXPAND_AI_OVERVIEW = `(async () => {
   const find = () => document.querySelector('[aria-label="Show more AI Overview"]');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -402,7 +411,7 @@ export class BrowserManager {
       }
       const extras = afterLoad && !interstitial ? await afterLoad(page) : undefined;
       t.after = Date.now();
-      const html = await page.content();
+      const html = await this.#captureSettledContent(page);
       this.logger?.debug("Rendered page", {
         host,
         browserMs: t.launched - t.start,
@@ -418,6 +427,40 @@ export class BrowserManager {
       if (ownedContext && context) await context.close().catch(() => {});
       else await page?.close().catch(() => {});
       this.#release();
+    }
+  }
+
+  /**
+   * Read the settled DOM for parsing. Two different races can corrupt this read:
+   *
+   * 1. `page.content()` evaluates in the page, so a navigation racing it (e.g. Google's
+   *    /sorry/ bounce firing while the results hydrate) destroys the execution context and
+   *    rejects with "Execution context was destroyed". That navigation leads to the page we
+   *    actually want, so wait and read again instead of failing the search with a 500.
+   * 2. If the navigation commits just before the read, `content()` can *succeed* on a
+   *    document the browser is still parsing: nothing throws, but the string has no results
+   *    container yet, which classifyPage reports as a 502 rather than a 500. Gate every read
+   *    on `document.readyState` so a half-parsed document is never the answer.
+   *
+   * The gate is a give-up budget (CAPTURE_SETTLE_BUDGET_MS), not a correctness guarantee.
+   * If it expires or the wait itself is interrupted, we fall through to the plain read —
+   * the behavior in place before the gate existed, so the gate cannot make things worse.
+   */
+  async #captureSettledContent(page: Page): Promise<string> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await page.waitForFunction('document.readyState !== "loading"', { timeout: CAPTURE_SETTLE_BUDGET_MS });
+      } catch {
+        // Interrupted or timed out; the read below decides, exactly as it did before the gate.
+      }
+      try {
+        return await page.content();
+      } catch (err) {
+        const transient = /Execution context was destroyed|Cannot find context with specified id/.test(String(err));
+        if (!transient || attempt >= 2) throw err;
+        this.logger?.debug("Page was navigating while capturing; retrying.", { attempt: attempt + 1 });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
     }
   }
 

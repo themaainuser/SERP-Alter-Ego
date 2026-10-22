@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listenSafe } from './safePort.js';
 
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 export const fixture = (name: string): string => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -41,11 +42,9 @@ export async function startFakeUpstream(routes: Record<string, Handler> = {}): P
     }
     handler(req, res, url);
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('fake upstream failed to bind');
+  const port = await listenSafe(server);
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url: `http://127.0.0.1:${port}`,
     hits,
     hitsFor: (p) => hits.filter((h) => h.path === p),
     set: (p, handler) => void table.set(p, handler),
