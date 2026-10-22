@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,6 +18,24 @@ import { encodeUule } from '../src/serpapi/params.js';
 import { isEncryptedRedirect, isGoogleHost } from '../src/parsers/common.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The rate-limiter tests wait only on the limiter's spacing timer, which is unref'd on
+ * purpose (see src/scraper/rateLimiter.ts: an idle limiter must not block process exit —
+ * in production the HTTP server holds the event loop open instead). Promises and unref'd
+ * timers do not hold the loop open, so with no other handle in this file the Node 22 test
+ * runner drains the loop mid-test and cancels everything that remains with "Promise
+ * resolution is still pending but the event loop has already resolved" (nodejs/node
+ * #49952). This ref'd interval stands in for the server. The CI Node 24 job passed the
+ * same hazard; this file must not depend on that luck.
+ */
+let keepAliveLoop: ReturnType<typeof setInterval>;
+before(() => {
+  keepAliveLoop = setInterval(() => {}, 100_000);
+});
+after(() => {
+  clearInterval(keepAliveLoop);
+});
 
 describe('page guards', () => {
   it('recognises the JS wall served to script-less clients', () => {
