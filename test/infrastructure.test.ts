@@ -222,6 +222,11 @@ describe('settings store', () => {
 });
 
 describe('misc units', () => {
+  it('runs the browser headed by default (stealth), overridable by env', () => {
+    assert.equal(loadConfig({}).browser.headful, true);
+    assert.equal(loadConfig({ BROWSER_HEADFUL: 'false' }).browser.headful, false);
+  });
+
   it('TtlCache expires entries and evicts the least recently used', () => {
     let now = 0;
     const c = new TtlCache({ max: 2, now: () => now });

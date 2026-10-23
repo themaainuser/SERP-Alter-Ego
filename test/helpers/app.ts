@@ -41,6 +41,7 @@ export async function startApp({ upstream, env = {}, overrides = {} }: StartAppO
     HTTP_TIMEOUT_MS: '3000',
     ROBOTS_POLICY: 'enforce',
     CACHE_TTL_SECONDS: '0',
+    BROWSER_HEADFUL: 'false', // suites run windowless; tests that need a window pass their own env
     ...(upstream ? { UPSTREAM_GOOGLE_URL: upstream.url, UPSTREAM_NEWS_URL: upstream.url } : {}),
     ...env,
   });

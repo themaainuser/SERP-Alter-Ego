@@ -78,7 +78,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       profileName: env.CHROME_PROFILE_NAME || env.CHROME_PROFILE || undefined,
       extraArgs: list(env.CHROME_ARGS),
       noSandbox: bool(env.CHROME_NO_SANDBOX, false),
-      headful: bool(env.BROWSER_HEADFUL, false),
+      /**
+       * Headed by default: the SeleniumBase recon showed headless Chrome is the more
+       * detectable path, so a visible window is the stealth default. On a Linux server
+       * without a display, display.ts starts Xvfb — or falls back to headless with a
+       * warning. Tests pin BROWSER_HEADFUL=false so suites stay windowless.
+       */
+      headful: bool(env.BROWSER_HEADFUL, true),
       /**
        * Navigate like a person instead of deep-linking: open the Google homepage, type the
        * query into the search box, submit, then land on the exact /search URL. A cold
