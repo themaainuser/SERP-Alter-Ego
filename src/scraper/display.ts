@@ -55,10 +55,12 @@ export function startXvfb({
 
     timer = setTimeout(() => {
       // Xvfb accepted the spawn but never reported a display: kill it, don't leak it.
+      // Deliberately NOT unref'd: while this promise is pending a launch is in progress,
+      // so the timeout must keep the event loop alive instead of letting it drain and
+      // cancel the await (exactly what a non-TTY CI runner does).
       if (!child.killed) child.kill();
       finish(null);
     }, timeoutMs);
-    timer.unref?.(); // a pending display start must never keep the process alive
 
     let out = "";
     child.stdout?.on("data", (chunk: Buffer | string) => {
