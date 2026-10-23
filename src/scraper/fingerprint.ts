@@ -8,6 +8,8 @@
  * Everything here derives from the UA string alone so the three views can never drift.
  */
 
+import type { Page } from "puppeteer";
+
 /** The client-hints fields we set (structurally compatible with CDP's UserAgentMetadata). */
 export interface UaMetadata {
   brands: Array<{ brand: string; version: string }>;
@@ -15,6 +17,8 @@ export interface UaMetadata {
   platform: string;
   platformVersion: string;
   architecture: string;
+  /** Device model — empty for desktop, required by the CDP type. */
+  model: string;
   bitness: string;
   mobile: boolean;
   wow64: boolean;
@@ -83,9 +87,31 @@ export function parseUaProfile(ua: string): UaProfile | null {
       platform,
       platformVersion,
       architecture,
+      model: "",
       bitness,
       mobile: false,
       wow64: false,
     },
   };
+}
+
+/**
+ * Give `page` the one identity `userAgent` describes: the UA string, the
+ * accept-language, and — when the UA parses — the platform and client-hints
+ * metadata derived from that same string, so navigator.userAgent,
+ * navigator.platform and the Sec-CH-UA* headers cannot contradict each other.
+ */
+export async function applyPageIdentity(
+  page: Page,
+  { userAgent, acceptLanguage }: { userAgent: string; acceptLanguage: string },
+): Promise<void> {
+  const profile = parseUaProfile(userAgent);
+  // Puppeteer 25's setUserAgent only takes { userAgent, userAgentMetadata, platform };
+  // the language goes out as an explicit header, exactly as before this helper existed.
+  await page.setUserAgent({
+    userAgent,
+    ...(profile ? { platform: profile.navigatorPlatform, userAgentMetadata: profile.metadata } : {}),
+  });
+  // Kept as an explicit header: the engines already depend on this header form.
+  await page.setExtraHTTPHeaders({ "accept-language": acceptLanguage });
 }

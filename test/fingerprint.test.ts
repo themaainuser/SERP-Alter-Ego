@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseUaProfile } from '../src/scraper/fingerprint.js';
+import type { Page } from 'puppeteer';
+import { applyPageIdentity, parseUaProfile } from '../src/scraper/fingerprint.js';
 
 describe('parseUaProfile', () => {
   it('maps the default Windows desktop UA to a coherent platform and client hints', () => {
@@ -48,5 +49,29 @@ describe('parseUaProfile', () => {
   it('returns null for a UA it cannot vouch for (no Chrome version)', () => {
     assert.equal(parseUaProfile('Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15'), null);
     assert.equal(parseUaProfile(''), null);
+  });
+});
+
+describe('applyPageIdentity', () => {
+  it('sets the UA together with a matching platform, client hints and accept-language', async () => {
+    let uaOpts: Record<string, unknown> = {}; let headers: Record<string, string> = {};
+    const page = {
+      setUserAgent: async (o: Record<string, unknown>) => { uaOpts = o; },
+      setExtraHTTPHeaders: async (h: Record<string, string>) => { headers = h; },
+    } as unknown as Page;
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
+    await applyPageIdentity(page, { userAgent: ua, acceptLanguage: 'de,en;q=0.8' });
+    assert.equal(uaOpts.userAgent, ua);
+    assert.equal(uaOpts.platform, 'Win32');
+    assert.ok((uaOpts.userAgentMetadata as { platform: string }).platform === 'Windows');
+    assert.deepEqual(headers, { 'accept-language': 'de,en;q=0.8' });
+  });
+
+  it('leaves platform and metadata unset when the UA cannot be parsed', async () => {
+    let uaOpts: Record<string, unknown> = {};
+    const page = { setUserAgent: async (o: Record<string, unknown>) => { uaOpts = o; }, setExtraHTTPHeaders: async () => {} } as unknown as Page;
+    await applyPageIdentity(page, { userAgent: 'SomethingOdd/1.0', acceptLanguage: 'en-US,en;q=0.9' });
+    assert.equal('platform' in uaOpts, false);
+    assert.equal('userAgentMetadata' in uaOpts, false);
   });
 });

@@ -5,6 +5,7 @@ import type { Logger } from "../logger.js";
 import type { PageRequest, RawPage } from "../types.js";
 import { solveSorryCaptcha, solverEnabled } from "./captchaSolver.js";
 import { CONSENT_COOKIE } from "./consent.js";
+import { applyPageIdentity } from "./fingerprint.js";
 import { looksLikeCaptcha } from "./guards.js";
 import { classifyNetworkError } from "./httpFetcher.js";
 import { browserProxyArgs, browserProxyAuth } from "./proxy.js";
@@ -257,8 +258,7 @@ export class BrowserManager {
         ownedContext = true;
         page = await context.newPage();
       }
-      await page.setUserAgent({ userAgent: userAgent || this.config.userAgent });
-      await page.setExtraHTTPHeaders({ "accept-language": acceptLanguage });
+      await applyPageIdentity(page, { userAgent: userAgent || this.config.userAgent, acceptLanguage });
       // Proxy credentials must be registered before any navigation, and the anti-detection
       // script must be injected before the first page load. Both are best-effort: neither may
       // ever abort a render.
