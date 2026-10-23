@@ -5,6 +5,7 @@ import type { Logger } from "../logger.js";
 import type { PageRequest, RawPage } from "../types.js";
 import { solveSorryCaptcha, solverEnabled } from "./captchaSolver.js";
 import { CONSENT_COOKIE } from "./consent.js";
+import { type DisplaySession, startXvfb } from "./display.js";
 import { applyPageIdentity } from "./fingerprint.js";
 import { looksLikeCaptcha } from "./guards.js";
 import { classifyNetworkError } from "./httpFetcher.js";
@@ -109,6 +110,9 @@ export class BrowserManager {
   private idleTimer: NodeJS.Timeout | undefined;
   private closeWhenDrained = false;
   private launches = 0;
+  /** What the last launch resolved to — false after the Linux Xvfb fallback, null before any launch. */
+  private effectiveHeadful: boolean | null = null;
+  private display: DisplaySession | null = null;
 
   constructor({
     config,
@@ -152,20 +156,43 @@ export class BrowserManager {
       ...browserProxyArgs(this.config),
       ...cfg.extraArgs,
     ];
-    this.launching = this.launcher({
-      headless: !cfg.headful,
-      executablePath: cfg.executablePath,
-      ...(userDataDir ? { userDataDir } : {}),
-      args,
-      defaultViewport: { width: 1366, height: 900 },
-    })
+    this.launching = (async () => {
+      // Headed needs a screen. On a Linux box without DISPLAY, start Xvfb ourselves —
+      // or fall back to headless with a warning, so the launch never dies over a display.
+      let headful = cfg.headful;
+      let launchEnv: NodeJS.ProcessEnv | undefined;
+      if (headful && process.platform === "linux" && !process.env.DISPLAY) {
+        this.display = await startXvfb();
+        if (this.display) {
+          launchEnv = { ...process.env, DISPLAY: this.display.display };
+          this.logger?.info("Started Xvfb for a headed browser", { display: this.display.display });
+        } else {
+          this.logger?.warn("BROWSER_HEADFUL=true but there is no DISPLAY and Xvfb could not start — running headless");
+          headful = false;
+        }
+      }
+      this.effectiveHeadful = headful;
+      return await this.launcher({
+        headless: !headful,
+        executablePath: cfg.executablePath,
+        ...(userDataDir ? { userDataDir } : {}),
+        ...(launchEnv ? { env: launchEnv } : {}),
+        args,
+        defaultViewport: { width: 1366, height: 900 },
+      });
+    })()
       .then((browser) => {
         this.browser = browser;
         this.launches++;
-        this.logger?.info("Headless browser launched", { pid: safe(() => browser.process()?.pid) });
+        const headless = !(this.effectiveHeadful ?? cfg.headful);
+        this.logger?.info(headless ? "Headless browser launched" : "Headed browser launched", {
+          pid: safe(() => browser.process()?.pid),
+          headless,
+        });
         browser.on("disconnected", () => {
           if (this.browser === browser) this.browser = null;
-          this.logger?.warn("Headless browser disconnected");
+          this.#stopDisplay();
+          this.logger?.warn("Browser disconnected");
         });
         return browser;
       })
@@ -344,7 +371,10 @@ export class BrowserManager {
 
         // --- Escalation: the automatic attempts failed — tell the human to solve it manually. ---
         if (!solvedCaptcha) {
-          if (cfg.headful && cfg.captchaInteractive) {
+          // A headed run that fell back to headless (no Xvfb) has no window to show —
+          // never ask the human to solve a CAPTCHA they cannot see.
+          const visible = this.effectiveHeadful ?? cfg.headful;
+          if (visible && cfg.captchaInteractive) {
             this.logger?.warn(
               `CAPTCHA not cleared after ${maxAuto} automatic attempt(s) — please solve it manually in the open browser window; the scrape continues once you do.`,
               { waitMs: cfg.captchaWaitMs, url: page.url() },
@@ -358,9 +388,9 @@ export class BrowserManager {
                 url: page.url(),
               });
             }
-          } else if (!cfg.headful) {
+          } else if (!visible) {
             this.logger?.warn(
-              `CAPTCHA not cleared after ${maxAuto} automatic attempt(s), and no browser window is visible (BROWSER_HEADFUL=false) — re-run with BROWSER_HEADFUL=true so you can solve it manually.`,
+              `CAPTCHA not cleared after ${maxAuto} automatic attempt(s), and no browser window is visible (headless: BROWSER_HEADFUL=false, or no DISPLAY/Xvfb) — re-run with a visible window so you can solve it manually.`,
               { url: page.url() },
             );
           } else {
@@ -537,6 +567,12 @@ export class BrowserManager {
   }
 
   /** Close the browser now, or as soon as in-flight pages finish. */
+  /** Stop the Xvfb session (if any) and forget it so a later relaunch starts a fresh one. */
+  #stopDisplay(): void {
+    this.display?.stop();
+    this.display = null;
+  }
+
   async close(): Promise<void> {
     clearTimeout(this.idleTimer);
     if (this.active > 0) {
@@ -546,9 +582,10 @@ export class BrowserManager {
     const browser = this.browser;
     this.browser = null;
     if (browser) {
-      this.logger?.info("Closing headless browser");
+      this.logger?.info("Closing browser");
       await browser.close().catch(() => {});
     }
+    this.#stopDisplay();
   }
 
   status(): BrowserStatus {
