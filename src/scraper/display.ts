@@ -44,7 +44,9 @@ export function startXvfb({
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      process.removeListener("exit", killHook);
+      // A handed-out session keeps the crash-safety hook until its stop(); a failed
+      // start removes it here so the hook never outlives the thing it protects.
+      if (session === null) process.removeListener("exit", killHook);
       resolve(session);
     };
     const stop = () => {

@@ -31,6 +31,11 @@ const defaultLauncher: BrowserLauncher = async (options) => {
   return puppeteer.launch(options);
 };
 
+/** A Linux server has no screen: headed Chrome then renders into an Xvfb display we start. */
+function requiresDisplay(): boolean {
+  return process.platform === "linux" && !process.env.DISPLAY;
+}
+
 export interface RenderOptions {
   readySelector?: PageRequest["readySelector"];
   readyTimeoutMs?: PageRequest["readyTimeoutMs"];
@@ -113,19 +118,31 @@ export class BrowserManager {
   /** What the last launch resolved to — false after the Linux Xvfb fallback, null before any launch. */
   private effectiveHeadful: boolean | null = null;
   private display: DisplaySession | null = null;
+  /** Starts the virtual display for a headed browser (injectable for tests). */
+  private readonly startDisplay: () => Promise<DisplaySession | null>;
+  /** Whether this platform has no screen to render into (injectable for tests). */
+  private readonly needsDisplay: () => boolean;
 
   constructor({
     config,
     logger,
     launcher = defaultLauncher,
+    startDisplay = startXvfb,
+    needsDisplay = requiresDisplay,
   }: {
     config: Config;
     logger?: Logger;
     launcher?: BrowserLauncher;
+    /** Injectable for tests: starts the virtual display for a headed browser. */
+    startDisplay?: () => Promise<DisplaySession | null>;
+    /** Injectable for tests: whether this platform has no screen to render into. */
+    needsDisplay?: () => boolean;
   }) {
     this.config = config;
     this.logger = logger;
     this.launcher = launcher;
+    this.startDisplay = startDisplay;
+    this.needsDisplay = needsDisplay;
   }
 
   async #ensureBrowser(): Promise<Browser> {
@@ -161,8 +178,8 @@ export class BrowserManager {
       // or fall back to headless with a warning, so the launch never dies over a display.
       let headful = cfg.headful;
       let launchEnv: NodeJS.ProcessEnv | undefined;
-      if (headful && process.platform === "linux" && !process.env.DISPLAY) {
-        this.display = await startXvfb();
+      if (headful && this.needsDisplay()) {
+        this.display = await this.startDisplay();
         if (this.display) {
           launchEnv = { ...process.env, DISPLAY: this.display.display };
           this.logger?.info("Started Xvfb for a headed browser", { display: this.display.display });
@@ -190,13 +207,15 @@ export class BrowserManager {
           headless,
         });
         browser.on("disconnected", () => {
-          if (this.browser === browser) this.browser = null;
+          if (this.browser !== browser) return; // a newer browser owns the display now
+          this.browser = null;
           this.#stopDisplay();
           this.logger?.warn("Browser disconnected");
         });
         return browser;
       })
       .catch((err: unknown) => {
+        this.#stopDisplay(); // the display started for THIS launch dies with it — never orphan Xvfb
         const profileHint = this.config.browser.userDataDir
           ? " If the profile is already open in Chrome, close it first (or copy the profile dir) — Chrome locks a User Data dir."
           : "";
@@ -566,13 +585,18 @@ export class BrowserManager {
     }
   }
 
-  /** Close the browser now, or as soon as in-flight pages finish. */
-  /** Stop the Xvfb session (if any) and forget it so a later relaunch starts a fresh one. */
-  #stopDisplay(): void {
-    this.display?.stop();
-    this.display = null;
+  /** Stop the current Xvfb session (or a captured one) and forget it so a later relaunch starts fresh. */
+  #stopDisplay(display = this.display): void {
+    if (!display) return;
+    if (display === this.display) this.display = null;
+    try {
+      display.stop();
+    } catch (error) {
+      this.logger?.warn(`Failed to stop X display: ${errorMessage(error)}`);
+    }
   }
 
+  /** Close the browser now, or as soon as in-flight pages finish. */
   async close(): Promise<void> {
     clearTimeout(this.idleTimer);
     if (this.active > 0) {
@@ -580,12 +604,14 @@ export class BrowserManager {
       return;
     }
     const browser = this.browser;
+    const display = this.display;
     this.browser = null;
+    this.display = null;
     if (browser) {
       this.logger?.info("Closing browser");
       await browser.close().catch(() => {});
     }
-    this.#stopDisplay();
+    this.#stopDisplay(display); // the display captured above — not whatever a relaunch assigned meanwhile
   }
 
   status(): BrowserStatus {
